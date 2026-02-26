@@ -172,6 +172,7 @@ Purchase modal action conventions (current):
 
 - Header sorting is enabled
 - `Actions` column is non-sortable
+- Default load ordering is the first column ascending (`order: [[0, "asc"]]`)
 - App may include a fallback header click handler that calls DataTables API directly if built-in header sorting hooks fail in a given environment
 - A runtime status/debug line may be shown in the page header (`Table Status: ...`) to indicate whether DataTables JS is loaded/active
 
@@ -203,6 +204,7 @@ Do not enable DataTables search unless product requirements are changed.
    - table
 4. Initialize DataTables with:
    - sorting enabled
+   - default sort on first column ascending
    - search disabled
    - actions column non-sortable
    - controls row placed below table

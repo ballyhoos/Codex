@@ -1,11 +1,11 @@
 import { openDB } from "idb";
 import type { DBSchema } from "idb";
-import type { AppSetting, CategoryNode, PurchaseRecord } from "./types";
+import type { AppSetting, CategoryNode, InventoryRecord } from "./types";
 
 interface TrackerDB extends DBSchema {
   inventory: {
     key: string;
-    value: PurchaseRecord;
+    value: InventoryRecord;
     indexes: {
       by_purchaseDate: string;
       by_productName: string;
@@ -30,8 +30,13 @@ interface TrackerDB extends DBSchema {
   };
 }
 
-export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
+export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 2, {
   async upgrade(db, _oldVersion, _newVersion, tx) {
+    const legacyTx = tx as any;
+    const legacyPurchasesStore = (db.objectStoreNames as any).contains("purchases")
+      ? legacyTx.objectStore("purchases")
+      : null;
+
     let inventoryStore = db.objectStoreNames.contains("inventory")
       ? tx.objectStore("inventory")
       : null;
@@ -43,6 +48,15 @@ export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
       inventoryStore.createIndex("by_active", "active");
       inventoryStore.createIndex("by_archived", "archived");
       inventoryStore.createIndex("by_updatedAt", "updatedAt");
+    }
+
+    // Migrate legacy "purchases" store records into "inventory" if present.
+    if (inventoryStore && legacyPurchasesStore) {
+      let cursor = await legacyPurchasesStore.openCursor();
+      while (cursor) {
+        await inventoryStore.put(cursor.value as InventoryRecord);
+        cursor = await cursor.continue() as typeof cursor;
+      }
     }
 
     let categoriesStore = db.objectStoreNames.contains("categories")
@@ -63,7 +77,7 @@ export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
     if (inventoryStore) {
       let cursor = await inventoryStore.openCursor();
       while (cursor) {
-        const p = cursor.value as PurchaseRecord;
+        const p = cursor.value as InventoryRecord;
         let changed = false;
         if (typeof p.active !== "boolean") {
           p.active = true;
@@ -85,8 +99,16 @@ export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
       let cursor = await categoriesStore.openCursor();
       while (cursor) {
         const c = cursor.value as CategoryNode;
+        let changed = false;
+        if (typeof c.active !== "boolean") {
+          c.active = true;
+          changed = true;
+        }
         if (typeof c.isArchived !== "boolean") {
           c.isArchived = false;
+          changed = true;
+        }
+        if (changed) {
           c.updatedAt = new Date().toISOString();
           await cursor.update(c);
         }
@@ -100,7 +122,7 @@ export async function listInventoryRecords() {
   return (await dbPromise).getAll("inventory");
 }
 
-export async function putInventoryRecord(record: PurchaseRecord) {
+export async function putInventoryRecord(record: InventoryRecord) {
   await (await dbPromise).put("inventory", record);
 }
 
@@ -129,7 +151,7 @@ export async function putSetting<T>(key: string, value: T) {
 }
 
 export async function replaceAllData(payload: {
-  purchases: PurchaseRecord[];
+  purchases: InventoryRecord[];
   categories: CategoryNode[];
   settings: AppSetting[];
 }) {

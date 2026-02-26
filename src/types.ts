@@ -1,6 +1,6 @@
-export type ViewId = "purchasesTable" | "categoriesList";
+export type ViewId = "inventoryTable" | "categoriesList";
 
-export interface PurchaseRecord {
+export interface InventoryRecord {
   id: string;
   purchaseDate: string; // YYYY-MM-DD
   productName: string;
@@ -25,6 +25,7 @@ export interface CategoryNode {
   pathNames: string[];
   depth: number;
   sortOrder: number;
+  active: boolean;
   isArchived: boolean;
   archivedAt?: string;
   createdAt: string;
@@ -41,14 +42,14 @@ export interface ExportBundleV1 {
   exportedAt: string;
   settings: AppSetting[];
   categories: CategoryNode[];
-  purchases: PurchaseRecord[];
+  purchases: InventoryRecord[];
 }
 
 export interface FilterClause {
   id: string;
   viewId: ViewId;
   field: string;
-  op: "eq" | "contains" | "inCategorySubtree";
+  op: "eq" | "contains" | "inCategorySubtree" | "isEmpty" | "isNotEmpty";
   value: string;
   label: string;
 }
@@ -63,11 +64,11 @@ export interface ColumnDef<Row> {
 }
 
 export interface AppState {
-  purchases: PurchaseRecord[];
+  inventoryRecords: InventoryRecord[];
   categories: CategoryNode[];
   settings: AppSetting[];
   filters: FilterClause[];
-  showArchivedPurchases: boolean;
+  showArchivedInventory: boolean;
   showArchivedCategories: boolean;
   exportText: string;
   importText: string;

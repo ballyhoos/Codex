@@ -20,7 +20,7 @@ import type {
   ColumnDef,
   ExportBundleV1,
   FilterClause,
-  PurchaseRecord,
+  InventoryRecord,
   ViewId,
 } from "./types";
 
@@ -33,8 +33,8 @@ type ModalState =
   | { kind: "settings" }
   | { kind: "categoryCreate" }
   | { kind: "categoryEdit"; categoryId: string }
-  | { kind: "purchaseCreate" }
-  | { kind: "purchaseEdit"; purchaseId: string };
+  | { kind: "inventoryCreate" }
+  | { kind: "inventoryEdit"; inventoryId: string };
 
 let modalState: ModalState = { kind: "none" };
 let lastFocusedBeforeModal: HTMLElement | null = null;
@@ -45,23 +45,37 @@ type DataTableInstanceLike = {
 };
 
 let categoriesTableDt: DataTableInstanceLike | null = null;
-let purchasesTableDt: DataTableInstanceLike | null = null;
+let inventoryTableDt: DataTableInstanceLike | null = null;
 let dataTablesLoadHookAttached = false;
 let dataTablesRetryTimer: number | null = null;
-let dataTablesStatusMessage = "";
+let pendingAddFilterTimer: number | null = null;
 
 let state: AppState = {
-  purchases: [],
+  inventoryRecords: [],
   categories: [],
   settings: [],
   filters: [],
-  showArchivedPurchases: false,
+  showArchivedInventory: false,
   showArchivedCategories: false,
   exportText: "",
   importText: "",
 };
 
 const DEFAULT_CURRENCY = "USD";
+const DEFAULT_CURRENCY_SYMBOL = "$";
+const CURRENCY_SYMBOL_OPTIONS = [
+  { value: "$", label: "Dollar ($)" },
+  { value: "€", label: "Euro (€)" },
+  { value: "£", label: "Pound (£)" },
+  { value: "¥", label: "Yen/Yuan (¥)" },
+  { value: "₹", label: "Rupee (₹)" },
+  { value: "₩", label: "Won (₩)" },
+  { value: "₽", label: "Ruble (₽)" },
+  { value: "₺", label: "Lira (₺)" },
+  { value: "₫", label: "Dong (₫)" },
+  { value: "₱", label: "Peso (₱)" },
+  { value: "₴", label: "Hryvnia (₴)" },
+];
 
 function nowIso() {
   return new Date().toISOString();
@@ -77,12 +91,13 @@ function escapeHtml(value: unknown): string {
 }
 
 function formatMoney(cents: number): string {
-  const currency = getSettingValue<string>("currencyCode") || DEFAULT_CURRENCY;
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency,
+  const symbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
+  const amount = new Intl.NumberFormat(undefined, {
+    style: "decimal",
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(cents / 100);
+  return `${symbol}${amount}`;
 }
 
 function parseMoneyToCents(raw: string): number | null {
@@ -144,9 +159,9 @@ function syncModalFocus() {
 
 function destroyDataTables() {
   categoriesTableDt?.destroy?.();
-  purchasesTableDt?.destroy?.();
+  inventoryTableDt?.destroy?.();
   categoriesTableDt = null;
-  purchasesTableDt = null;
+  inventoryTableDt = null;
 }
 
 function initDataTables() {
@@ -159,7 +174,6 @@ function initDataTables() {
   const DataTableCtor = w.DataTable;
   const jQueryDataTable = w.jQuery && w.jQuery.fn?.DataTable ? w.jQuery : undefined;
   if (!DataTableCtor && !jQueryDataTable) {
-    dataTablesStatusMessage = "DataTables JS not loaded";
     if (dataTablesRetryTimer == null) {
       dataTablesRetryTimer = window.setTimeout(() => {
         dataTablesRetryTimer = null;
@@ -179,7 +193,7 @@ function initDataTables() {
   }
 
   const categoriesTable = rootEl.querySelector<HTMLTableElement>("#categories-table");
-  const purchasesTable = rootEl.querySelector<HTMLTableElement>("#purchases-table");
+  const inventoryTable = rootEl.querySelector<HTMLTableElement>("#inventory-table");
   const makeDt = (table: HTMLTableElement, opts: Record<string, unknown>): DataTableInstanceLike | null => {
     if (DataTableCtor) return new DataTableCtor(table, opts);
     if (jQueryDataTable) return jQueryDataTable(table).DataTable?.(opts) ?? null;
@@ -198,14 +212,14 @@ function initDataTables() {
         emptyTable: "No categories",
       },
       ordering: { handler: true, indicators: true },
-      order: [],
+      order: [[0, "asc"]],
       columnDefs: [{ targets: -1, orderable: false }],
     });
     wireDataTableHeaderSorting(categoriesTable, categoriesTableDt);
   }
 
-  if (purchasesTable) {
-    purchasesTableDt = makeDt(purchasesTable, {
+  if (inventoryTable) {
+    inventoryTableDt = makeDt(inventoryTable, {
       dom: "t<'dt-bottom-row row align-items-center g-2 mt-2'<'col-md-4'i><'col-md-4 d-flex justify-content-md-center justify-content-start'l><'col-md-4 d-flex justify-content-md-end justify-content-start'p>>",
       paging: true,
       pageLength: 10,
@@ -216,14 +230,12 @@ function initDataTables() {
         emptyTable: "No inventory records",
       },
       ordering: { handler: true, indicators: true },
-      order: [],
+      order: [[0, "asc"]],
       columnDefs: [{ targets: -1, orderable: false }],
     });
-    wireDataTableHeaderSorting(purchasesTable, purchasesTableDt);
+    wireDataTableHeaderSorting(inventoryTable, inventoryTableDt);
   }
 
-  const mode = DataTableCtor ? "vanilla" : "jQuery";
-  dataTablesStatusMessage = `DataTables active (${mode}: ${categoriesTableDt ? "categories" : ""}${categoriesTableDt && purchasesTableDt ? ", " : ""}${purchasesTableDt ? "purchases" : ""})`;
 }
 
 function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInstanceLike | null) {
@@ -254,13 +266,17 @@ function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInst
 
 
 async function reloadData() {
-  const [purchases, categories, settings] = await Promise.all([listInventoryRecords(), listCategories(), listSettings()]);
+  const [inventoryRecords, categories, settings] = await Promise.all([listInventoryRecords(), listCategories(), listSettings()]);
   const normalizedCategories = recomputeCategoryPaths(categories).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   if (!settings.some((s) => s.key === "currencyCode")) {
     await putSetting("currencyCode", DEFAULT_CURRENCY);
     settings.push({ key: "currencyCode", value: DEFAULT_CURRENCY });
   }
-  state = { ...state, purchases, categories: normalizedCategories, settings };
+  if (!settings.some((s) => s.key === "currencySymbol")) {
+    await putSetting("currencySymbol", DEFAULT_CURRENCY_SYMBOL);
+    settings.push({ key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL });
+  }
+  state = { ...state, inventoryRecords, categories: normalizedCategories, settings };
   render();
 }
 
@@ -275,12 +291,36 @@ function getCategoryPathLabel(categoryId: string): string {
   return c.pathNames.join(" / ");
 }
 
+function getCategoryPathLabelWithStatus(categoryId: string): string {
+  return getCategoryPathLabel(categoryId);
+}
+
+function hasInactiveCategoryInPath(categoryId: string): boolean {
+  const category = getCategoryById(categoryId);
+  if (!category) return false;
+  return category.pathIds.some((id) => getCategoryById(id)?.active === false);
+}
+
+function isInventoryRecordDisabledByCategory(record: InventoryRecord): boolean {
+  const category = getCategoryById(record.categoryId);
+  if (!category) return false;
+  for (const id of category.pathIds) {
+    const c = getCategoryById(id);
+    if (c?.active === false) return true;
+  }
+  return false;
+}
+
+function isInventoryRecordEffectivelyActive(record: InventoryRecord): boolean {
+  return record.active && !isInventoryRecordDisabledByCategory(record);
+}
+
 function moneyInputFromCents(cents: number | undefined): string {
   if (cents == null) return "";
   return (cents / 100).toFixed(2);
 }
 
-function syncPurchaseFormUnitPrice(form: HTMLFormElement) {
+function syncInventoryFormUnitPrice(form: HTMLFormElement) {
   const qtyEl = form.querySelector<HTMLInputElement>('input[name="quantity"]');
   const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
   const unitEl = form.querySelector<HTMLInputElement>('input[name="unitPrice"]');
@@ -299,14 +339,18 @@ function getParentCategoryName(category: CategoryNode): string {
   return category.parentId ? getCategoryById(category.parentId)?.name || "(Unknown)" : "";
 }
 
-function buildPurchaseColumns(): ColumnDef<PurchaseRecord>[] {
+function isInventoryRecordCountableForCategoryMetrics(record: InventoryRecord): boolean {
+  return record.active && !record.archived;
+}
+
+function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
   return [
     { key: "productName", label: "Name", getValue: (r) => r.productName, getDisplay: (r) => r.productName, filterable: true, filterOp: "contains" },
     {
       key: "categoryId",
       label: "Category / Path",
       getValue: (r) => r.categoryId,
-      getDisplay: (r) => getCategoryPathLabel(r.categoryId),
+      getDisplay: (r) => getCategoryPathLabelWithStatus(r.categoryId),
       filterable: true,
       filterOp: "inCategorySubtree",
     },
@@ -333,8 +377,8 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
   ];
 }
 
-function getPurchaseBaseRows(): PurchaseRecord[] {
-  return state.showArchivedPurchases ? state.purchases : state.purchases.filter((p) => !p.archived);
+function getInventoryBaseRows(): InventoryRecord[] {
+  return state.showArchivedInventory ? state.inventoryRecords : state.inventoryRecords.filter((p) => !p.archived);
 }
 
 function getCategoryBaseRows(): CategoryNode[] {
@@ -342,24 +386,24 @@ function getCategoryBaseRows(): CategoryNode[] {
 }
 
 function getDerived() {
-  const purchaseColumns = buildPurchaseColumns();
+  const inventoryColumns = buildInventoryColumns();
   const baseCategoryColumns = buildCategoryColumns();
   const categoryDescendantsMap = buildDescendantMap(state.categories);
 
-  const filteredPurchases = applyViewFilters(
-    getPurchaseBaseRows(),
+  const filteredInventoryRecords = applyViewFilters(
+    getInventoryBaseRows(),
     state.filters,
-    "purchasesTable",
-    purchaseColumns,
+    "inventoryTable",
+    inventoryColumns,
     { categoryDescendantsMap },
   );
 
   const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
-  const totalsInput = filteredPurchases.filter((p) => p.active && !p.archived);
+  const totalsInput = filteredInventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
   const categoryTotals = computeCategoryTotals(totalsInput, visibleCategoriesForTotals);
   const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
   const categoryItems = new Map<string, number>();
-  for (const p of filteredPurchases) {
+  for (const p of filteredInventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics)) {
     const purchaseCategory = categoriesById.get(p.categoryId);
     if (!purchaseCategory) continue;
     for (const categoryId of purchaseCategory.pathIds) {
@@ -384,16 +428,16 @@ function getDerived() {
       filterable: true,
       filterOp: "eq",
     },
-    { key: "active", label: "Active", getValue: (r) => !r.isArchived, getDisplay: (r) => (r.isArchived ? "Inactive" : "Active"), filterable: true, filterOp: "eq" },
+    { key: "active", label: "Active", getValue: (r) => r.active && !r.isArchived, getDisplay: (r) => (r.active && !r.isArchived ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
   ];
 
   const filteredCategories = applyViewFilters(getCategoryBaseRows(), state.filters, "categoriesList", categoryColumns);
 
   return {
-    purchaseColumns,
+    inventoryColumns,
     categoryColumns,
     categoryDescendantsMap,
-    filteredPurchases,
+    filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
     visibleCategoriesForTotals,
@@ -425,20 +469,30 @@ function renderFilterChips(viewId: ViewId, title: string) {
           </nav>
         </div>
       ` : `<div class="chips-list"><span class="chips-empty text-body-secondary small">No filters</span></div>`}
-      ${chips.length ? `<button type="button" class="secondary-btn btn btn-sm btn-outline-secondary chips-clear-btn" data-action="clear-filters" data-view-id="${viewId}">Clear Filter</button>` : ""}
     </div>
   `;
 }
 
 function renderClickableCell<Row>(viewId: ViewId, row: Row, col: ColumnDef<Row>): string {
+  const rawValue = col.getValue(row);
   const display = col.getDisplay(row);
-  const value = String(col.getValue(row));
+  const value = rawValue == null ? "" : String(rawValue);
   if (!col.filterable) return escapeHtml(display);
-  return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}">${escapeHtml(display)}</button>`;
+  const isEmptyDisplay = display.trim() === "";
+  if (isEmptyDisplay) {
+    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="isEmpty" data-value="" data-label="${escapeHtml(`${col.label}: Empty`)}" title="Filter ${escapeHtml(col.label)} by empty value"><span class="filter-hit">—</span></button>`;
+  }
+  if (viewId === "inventoryTable" && col.key === "categoryId" && typeof row === "object" && row && "categoryId" in (row as object)) {
+    const categoryId = String((row as Record<string, unknown>).categoryId);
+    const inactive = hasInactiveCategoryInPath(categoryId);
+    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}${inactive ? ' <i class="bi bi-exclamation-diamond-fill text-danger ms-1" aria-label="Inactive category path" title="Inactive category path"></i>' : ""}</span></button>`;
+  }
+  return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
 }
 
 function renderModal(): string {
   if (modalState.kind === "none") return "";
+  const currencySymbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
 
   const categoryOptions = (excludeIds?: Set<string>, selectedId?: string | null) =>
     state.categories
@@ -462,6 +516,12 @@ function renderModal(): string {
                   Currency code
                   <input class="form-control" name="currencyCode" value="${escapeHtml((getSettingValue<string>("currencyCode") || DEFAULT_CURRENCY).toUpperCase())}" maxlength="3" required />
                 </label>
+                <label class="form-label mb-0">
+                  Currency symbol
+                  <select class="form-select" name="currencySymbol">
+                    ${CURRENCY_SYMBOL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt.value)}" ${((getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL) === opt.value) ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
+                  </select>
+                </label>
               </div>
               <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
@@ -479,16 +539,25 @@ function renderModal(): string {
     const category = modalState.kind === "categoryEdit" ? getCategoryById(modalState.categoryId) : undefined;
     if (editing && !category) return "";
     const excludedIds = editing && category ? new Set(collectSubtreeIds(state.categories, category.id)) : undefined;
+    const categoryDescendantsMap = buildDescendantMap(state.categories);
+    const filteredInventoryForCategoryStats = applyViewFilters(
+      getInventoryBaseRows(),
+      state.filters,
+      "inventoryTable",
+      buildInventoryColumns(),
+      { categoryDescendantsMap },
+    );
     const currentTotal = category ? computeCategoryTotals(
-      applyViewFilters(
-        getPurchaseBaseRows(),
-        state.filters,
-        "purchasesTable",
-        buildPurchaseColumns(),
-        { categoryDescendantsMap: buildDescendantMap(state.categories) },
-      ).filter((p) => p.active && !p.archived),
+      filteredInventoryForCategoryStats.filter(isInventoryRecordCountableForCategoryMetrics),
       state.categories.filter((c) => !c.isArchived),
     ).get(category.id) || 0 : 0;
+    const currentItems = category
+      ? filteredInventoryForCategoryStats.filter((p) => {
+        if (!isInventoryRecordCountableForCategoryMetrics(p)) return false;
+        const purchaseCategory = getCategoryById(p.categoryId);
+        return purchaseCategory ? purchaseCategory.pathIds.includes(category.id) : false;
+      }).length
+      : 0;
     return `
       <div class="modal fade show d-block" data-action="close-modal-backdrop" tabindex="-1" role="presentation">
         <div class="modal-dialog modal-dialog-centered">
@@ -507,6 +576,12 @@ function renderModal(): string {
                 ${categoryOptions(excludedIds, category?.parentId || null)}
               </select>
             </label>
+            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
+            ${editing ? `
+            <label class="form-label mb-0">Items (read-only)
+              <input class="form-control" value="${escapeHtml(String(currentItems))}" disabled />
+            </label>
+            ` : ""}
             ${editing ? `
             <label class="form-label mb-0">Current total (read-only)
               <input class="form-control" value="${escapeHtml(formatMoney(currentTotal))}" disabled />
@@ -515,7 +590,7 @@ function renderModal(): string {
             <div class="modal-footer px-0 pb-0">
               ${editing && category ? `<button type="button" class="btn ${category.isArchived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-category-subtree-archived" data-id="${category.id}" data-next-archived="${String(!category.isArchived)}">${category.isArchived ? "Restore Record" : "Archive Record"}</button>` : ""}
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">${editing ? "Save category" : "Add category"}</button>
+              <button type="submit" class="btn btn-primary">${editing ? "Save" : "Create"}</button>
             </div>
           </form>
         </div>
@@ -524,7 +599,7 @@ function renderModal(): string {
     `;
   }
 
-  if (modalState.kind === "purchaseCreate") {
+  if (modalState.kind === "inventoryCreate") {
     return `
       <div class="modal fade show d-block" data-action="close-modal-backdrop" tabindex="-1" role="presentation">
         <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -533,14 +608,24 @@ function renderModal(): string {
             <h2 id="modal-title-purchase" class="modal-title fs-5">Create Inventory Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
-          <form id="purchase-form" class="modal-body d-grid gap-3">
+          <form id="inventory-form" class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="create" />
-            <input type="hidden" name="purchaseId" value="" />
+            <input type="hidden" name="inventoryId" value="" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="" /></label>
             <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="" /></label>
-            <label class="form-label mb-0">Total price<input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="" /></label>
-            <label class="form-label mb-0">Per-item price (auto)<input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled /></label>
+            <label class="form-label mb-0">Total price
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="" />
+              </div>
+            </label>
+            <label class="form-label mb-0">Per-item price (auto)
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled />
+              </div>
+            </label>
             <label>Category
               <select class="form-select" name="categoryId" required>
                 <option value="">Select category</option>
@@ -551,7 +636,7 @@ function renderModal(): string {
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3"></textarea></label>
             <div class="modal-footer px-0 pb-0">
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Add Inventory Record</button>
+              <button type="submit" class="btn btn-primary">Create</button>
             </div>
           </form>
         </div>
@@ -560,9 +645,9 @@ function renderModal(): string {
     `;
   }
 
-  if (modalState.kind === "purchaseEdit") {
+  if (modalState.kind === "inventoryEdit") {
     const modal = modalState;
-    const purchase = state.purchases.find((p) => p.id === modal.purchaseId);
+    const purchase = state.inventoryRecords.find((p) => p.id === modal.inventoryId);
     if (!purchase) return "";
     return `
       <div class="modal fade show d-block" data-action="close-modal-backdrop" tabindex="-1" role="presentation">
@@ -572,14 +657,24 @@ function renderModal(): string {
             <h2 id="modal-title-purchase" class="modal-title fs-5">Edit Inventory Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
-          <form id="purchase-form" class="modal-body d-grid gap-3">
+          <form id="inventory-form" class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="edit" />
-            <input type="hidden" name="purchaseId" value="${escapeHtml(purchase.id)}" />
+            <input type="hidden" name="inventoryId" value="${escapeHtml(purchase.id)}" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${escapeHtml(purchase.purchaseDate)}" /></label>
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="${escapeHtml(purchase.productName)}" /></label>
             <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="${escapeHtml(String(purchase.quantity))}" /></label>
-            <label class="form-label mb-0">Total price<input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="${escapeHtml(moneyInputFromCents(purchase.totalPriceCents))}" /></label>
-            <label class="form-label mb-0">Per-item price (auto)<input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" disabled /></label>
+            <label class="form-label mb-0">Total price
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="${escapeHtml(moneyInputFromCents(purchase.totalPriceCents))}" />
+              </div>
+            </label>
+            <label class="form-label mb-0">Per-item price (auto)
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" disabled />
+              </div>
+            </label>
             <label>Category
               <select class="form-select" name="categoryId" required>
                 <option value="">Select category</option>
@@ -589,9 +684,9 @@ function renderModal(): string {
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${purchase.active ? "checked" : ""} /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3">${escapeHtml(purchase.notes || "")}</textarea></label>
             <div class="modal-footer px-0 pb-0">
-              <button type="button" class="btn ${purchase.archived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-purchase-archived" data-id="${purchase.id}" data-next-archived="${String(!purchase.archived)}">${purchase.archived ? "Restore Record" : "Archive Record"}</button>
+              <button type="button" class="btn ${purchase.archived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-inventory-archived" data-id="${purchase.id}" data-next-archived="${String(!purchase.archived)}">${purchase.archived ? "Restore Record" : "Archive Record"}</button>
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save Inventory Record</button>
+              <button type="submit" class="btn btn-primary">Save</button>
             </div>
           </form>
         </div>
@@ -607,24 +702,24 @@ function render() {
   destroyDataTables();
 
   const {
-    purchaseColumns,
+    inventoryColumns,
     categoryColumns,
-    filteredPurchases,
+    filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
     visibleCategoriesForTotals,
   } = getDerived();
 
   const exportText = state.exportText || buildExportJsonText();
-  const purchasesRowsHtml = filteredPurchases
+  const inventoryRowsHtml = filteredInventoryRecords
     .map((p) => {
-      const rowClass = [!p.active ? "row-inactive" : "", p.archived ? "row-archived" : ""].filter(Boolean).join(" ");
+      const rowClass = [!isInventoryRecordEffectivelyActive(p) ? "row-inactive" : "", p.archived ? "row-archived" : ""].filter(Boolean).join(" ");
       return `
-        <tr class="${rowClass}">
-          ${purchaseColumns.map((col) => `<td>${renderClickableCell("purchasesTable", p, col)}</td>`).join("")}
+        <tr class="${rowClass}" data-row-edit="inventory" data-id="${p.id}">
+          ${inventoryColumns.map((col) => `<td>${renderClickableCell("inventoryTable", p, col)}</td>`).join("")}
           <td class="actions-col-cell">
             <div class="actions-cell">
-              <button type="button" class="btn btn-sm btn-outline-primary action-menu-btn" data-action="edit-purchase" data-id="${p.id}">Edit</button>
+              <button type="button" class="btn btn-sm btn-outline-primary action-menu-btn" data-action="edit-inventory" data-id="${p.id}">Edit</button>
             </div>
           </td>
         </tr>
@@ -634,7 +729,7 @@ function render() {
 
   const categoriesRowsHtml = filteredCategories
     .map((c) => `
-      <tr class="${c.isArchived ? "row-archived" : ""}">
+      <tr class="${[!c.active ? "row-inactive" : "", c.isArchived ? "row-archived" : ""].filter(Boolean).join(" ")}" data-row-edit="category" data-id="${c.id}">
         ${categoryColumns.map((col) => `<td>${renderClickableCell("categoriesList", c, col)}</td>`).join("")}
         <td class="actions-col-cell">
           <div class="actions-cell">
@@ -652,7 +747,6 @@ function render() {
           <div>
             <h1 class="display-6 mb-1">Investments</h1>
             <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
-            ${dataTablesStatusMessage ? `<div class="small mt-1 text-body-secondary">Table Status: ${escapeHtml(dataTablesStatusMessage)}</div>` : ""}
           </div>
           <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
         </div>
@@ -661,10 +755,10 @@ function render() {
       <section class="card shadow-sm">
         <div class="card-body">
         <div class="section-head">
-          <h2 class="h5 mb-0">Categories List</h2>
+          <h2 class="h5 mb-0">Categories</h2>
           <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
-            <button type="button" class="btn btn-sm btn-primary action-menu-btn" data-action="open-create-category">Create New</button>
+            <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
         ${renderFilterChips("categoriesList", "Category list")}
@@ -689,21 +783,21 @@ function render() {
         <div class="section-head">
           <h2 class="h5 mb-0">Inventory</h2>
           <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
-            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-purchases" ${state.showArchivedPurchases ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
-            <button type="button" class="btn btn-sm btn-success action-menu-btn" data-action="open-create-purchase">Create New</button>
+            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+            <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
           </div>
         </div>
-        ${renderFilterChips("purchasesTable", "Inventory")}
+        ${renderFilterChips("inventoryTable", "Inventory")}
         <div class="table-wrap table-responsive">
-          <table id="purchases-table" class="table table-striped table-sm table-hover align-middle mb-0">
+          <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
-                ${purchaseColumns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}
+                ${inventoryColumns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}
                 <th class="actions-col" aria-label="Actions"></th>
               </tr>
             </thead>
             <tbody>
-              ${purchasesRowsHtml}
+              ${inventoryRowsHtml}
             </tbody>
           </table>
         </div>
@@ -716,9 +810,7 @@ function render() {
         <div class="tools-grid">
           <div>
             <div class="toolbar-row">
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-action="refresh-export">Refresh export</button>
               <button type="button" class="btn btn-outline-primary btn-sm" data-action="download-json">Download JSON</button>
-              <button type="button" class="btn btn-outline-primary btn-sm" data-action="download-csv">Download CSV</button>
             </div>
             <label class="form-label">Export / Copy JSON
               <textarea class="form-control" id="export-text" rows="10" readonly>${escapeHtml(exportText)}</textarea>
@@ -736,7 +828,7 @@ function render() {
         </div>
         <div class="danger-zone border border-danger-subtle rounded-3 p-3 mt-3 bg-danger-subtle">
           <h3 class="h6">Wipe All Data</h3>
-          <p class="mb-2">Hard delete all IndexedDB data (purchases, categories, settings). This is separate from archive/restore.</p>
+          <p class="mb-2">Hard delete all IndexedDB data (inventory, categories, settings). This is separate from archive/restore.</p>
           <label class="form-label">Type DELETE to confirm <input class="form-control" id="wipe-confirm" /></label>
           <button type="button" class="danger-btn btn btn-danger" data-action="wipe-all">Wipe all data</button>
         </div>
@@ -745,8 +837,8 @@ function render() {
     </div>
     ${renderModal()}
   `;
-  const purchaseForm = rootEl.querySelector<HTMLFormElement>('#purchase-form');
-  if (purchaseForm) syncPurchaseFormUnitPrice(purchaseForm);
+  const purchaseForm = rootEl.querySelector<HTMLFormElement>('#inventory-form');
+  if (purchaseForm) syncInventoryFormUnitPrice(purchaseForm);
   syncModalFocus();
   initDataTables();
 }
@@ -757,56 +849,12 @@ function buildExportBundle(): ExportBundleV1 {
     exportedAt: nowIso(),
     settings: state.settings,
     categories: state.categories,
-    purchases: state.purchases,
+    purchases: state.inventoryRecords,
   };
 }
 
 function buildExportJsonText(): string {
   return JSON.stringify(buildExportBundle(), null, 2);
-}
-
-function buildCsv(): string {
-  const header = [
-    "id",
-    "purchaseDate",
-    "productName",
-    "quantity",
-    "totalPriceCents",
-    "unitPriceCents",
-    "unitPriceSource",
-    "categoryId",
-    "categoryPath",
-    "active",
-    "archived",
-    "archivedAt",
-    "notes",
-    "createdAt",
-    "updatedAt",
-  ];
-  const rows = state.purchases.map((p) => [
-    p.id,
-    p.purchaseDate,
-    p.productName,
-    String(p.quantity),
-    String(p.totalPriceCents),
-    String(p.unitPriceCents ?? ""),
-    p.unitPriceSource,
-    p.categoryId,
-    getCategoryPathLabel(p.categoryId),
-    String(p.active),
-    String(p.archived),
-    p.archivedAt || "",
-    p.notes || "",
-    p.createdAt,
-    p.updatedAt,
-  ]);
-
-  const csvEscape = (s: string) => {
-    const v = String(s ?? "");
-    if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
-    return v;
-  };
-  return [header.map(csvEscape).join(","), ...rows.map((r) => r.map(csvEscape).join(","))].join("\n");
 }
 
 function downloadTextFile(filename: string, content: string, type: string) {
@@ -822,11 +870,17 @@ function downloadTextFile(filename: string, content: string, type: string) {
 async function handleSettingsSubmit(form: HTMLFormElement) {
   const fd = new FormData(form);
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
+  const currencySymbol = String(fd.get("currencySymbol") || "").trim();
   if (!/^[A-Z]{3}$/.test(currencyCode)) {
     alert("Currency code must be a 3-letter code like USD.");
     return;
   }
+  if (!currencySymbol) {
+    alert("Select a currency symbol.");
+    return;
+  }
   await putSetting("currencyCode", currencyCode);
+  await putSetting("currencySymbol", currencySymbol);
   closeModal();
   await reloadData();
 }
@@ -837,6 +891,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
   const categoryIdInput = String(fd.get("categoryId") || "").trim();
   const name = String(fd.get("name") || "").trim();
   const parentIdRaw = String(fd.get("parentId") || "").trim();
+  const active = fd.get("active") === "on";
   if (!name) return;
   const parentId = parentIdRaw || null;
   if (parentId && !getCategoryById(parentId)) {
@@ -862,6 +917,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     const parentChanged = existing.parentId !== parentId;
     existing.name = name;
     existing.parentId = parentId;
+    existing.active = active;
     if (parentChanged) {
       existing.sortOrder = state.categories.filter((c) => c.parentId === parentId && c.id !== existing.id).length;
     }
@@ -882,6 +938,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     pathNames: [],
     depth: 0,
     sortOrder: siblingCount,
+    active,
     isArchived: false,
     createdAt: now,
     updatedAt: now,
@@ -891,10 +948,10 @@ async function handleCategorySubmit(form: HTMLFormElement) {
   await reloadData();
 }
 
-async function handlePurchaseSubmit(form: HTMLFormElement) {
+async function handleInventorySubmit(form: HTMLFormElement) {
   const fd = new FormData(form);
   const mode = String(fd.get("mode") || "create");
-  const purchaseIdInput = String(fd.get("purchaseId") || "").trim();
+  const inventoryIdInput = String(fd.get("inventoryId") || "").trim();
   const purchaseDate = String(fd.get("purchaseDate") || "");
   const productName = String(fd.get("productName") || "").trim();
   const quantity = Number(fd.get("quantity"));
@@ -922,8 +979,8 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
   const derivedUnitPriceCents = Math.round(totalPriceCents / quantity);
 
   if (mode === "edit") {
-    if (!purchaseIdInput) return;
-    const existing = await getInventoryRecord(purchaseIdInput);
+    if (!inventoryIdInput) return;
+    const existing = await getInventoryRecord(inventoryIdInput);
     if (!existing) {
       alert("Inventory record not found.");
       return;
@@ -945,7 +1002,7 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
   }
 
   const now = nowIso();
-  const record: PurchaseRecord = {
+  const record: InventoryRecord = {
     id: crypto.randomUUID(),
     purchaseDate,
     productName,
@@ -966,7 +1023,7 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
   await reloadData();
 }
 
-async function togglePurchaseActive(id: string, nextActive: boolean) {
+async function toggleInventoryActive(id: string, nextActive: boolean) {
   const rec = await getInventoryRecord(id);
   if (!rec) return;
   rec.active = nextActive;
@@ -975,7 +1032,7 @@ async function togglePurchaseActive(id: string, nextActive: boolean) {
   await reloadData();
 }
 
-async function togglePurchaseArchived(id: string, nextArchived: boolean) {
+async function toggleInventoryArchived(id: string, nextArchived: boolean) {
   const rec = await getInventoryRecord(id);
   if (!rec) return;
   if (nextArchived && !window.confirm(`Archive inventory record "${rec.productName}"?`)) return;
@@ -1012,6 +1069,7 @@ function normalizeImportedCategory(raw: any): CategoryNode {
     pathNames: Array.isArray(raw.pathNames) ? raw.pathNames.map(String) : [],
     depth: Number.isFinite(raw.depth) ? Number(raw.depth) : 0,
     sortOrder: Number.isFinite(raw.sortOrder) ? Number(raw.sortOrder) : 0,
+    active: typeof raw.active === "boolean" ? raw.active : true,
     isArchived: typeof raw.isArchived === "boolean" ? raw.isArchived : false,
     archivedAt: raw.archivedAt ? String(raw.archivedAt) : undefined,
     createdAt: raw.createdAt ? String(raw.createdAt) : now,
@@ -1019,7 +1077,7 @@ function normalizeImportedCategory(raw: any): CategoryNode {
   };
 }
 
-function normalizeImportedPurchase(raw: any): PurchaseRecord {
+function normalizeImportedInventoryRecord(raw: any): InventoryRecord {
   const now = nowIso();
   const quantity = Number(raw.quantity);
   const totalPriceCents = Number(raw.totalPriceCents);
@@ -1069,19 +1127,22 @@ async function handleReplaceImport() {
   try {
     const categories = recomputeCategoryPaths(parsed.categories.map(normalizeImportedCategory));
     const categoryIds = new Set(categories.map((c) => c.id));
-    const purchases = parsed.purchases.map(normalizeImportedPurchase);
-    for (const p of purchases) {
+    const importedInventoryRecords = parsed.purchases.map(normalizeImportedInventoryRecord);
+    for (const p of importedInventoryRecords) {
       if (!categoryIds.has(p.categoryId)) {
-        throw new Error(`Purchase ${p.id} references missing categoryId ${p.categoryId}`);
+        throw new Error(`Inventory record ${p.id} references missing categoryId ${p.categoryId}`);
       }
     }
     const settings: AppSetting[] = Array.isArray(parsed.settings)
       ? parsed.settings.map((s: any) => ({ key: String(s.key), value: s.value }))
-      : [{ key: "currencyCode", value: DEFAULT_CURRENCY }];
+      : [
+        { key: "currencyCode", value: DEFAULT_CURRENCY },
+        { key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL },
+      ];
 
     const confirmed = window.confirm("Replace all existing data with imported data? This cannot be undone.");
     if (!confirmed) return;
-    await replaceAllData({ purchases, categories, settings });
+    await replaceAllData({ purchases: importedInventoryRecords, categories, settings });
     setState({ importText: "" });
     await reloadData();
   } catch (err) {
@@ -1104,8 +1165,8 @@ function addFilterFromElement(el: HTMLElement) {
   let nextState: Partial<AppState> = {
     filters: addFilter(state.filters, { viewId, field, op, value, label }),
   };
-  if (viewId === "purchasesTable" && field === "archived" && value === "true" && !state.showArchivedPurchases) {
-    nextState.showArchivedPurchases = true;
+  if (viewId === "inventoryTable" && field === "archived" && value === "true" && !state.showArchivedInventory) {
+    nextState.showArchivedInventory = true;
   }
   if (viewId === "categoriesList" && (field === "isArchived" || field === "archived") && value === "true" && !state.showArchivedCategories) {
     nextState.showArchivedCategories = true;
@@ -1114,6 +1175,13 @@ function addFilterFromElement(el: HTMLElement) {
     nextState.showArchivedCategories = true;
   }
   setState(nextState);
+}
+
+function clearPendingAddFilterTimer() {
+  if (pendingAddFilterTimer != null) {
+    window.clearTimeout(pendingAddFilterTimer);
+    pendingAddFilterTimer = null;
+  }
 }
 
 rootEl.addEventListener("click", async (event) => {
@@ -1125,6 +1193,16 @@ rootEl.addEventListener("click", async (event) => {
   if (!action) return;
 
   if (action === "add-filter") {
+    if (!target.closest(".filter-hit")) return;
+    if (event instanceof MouseEvent) {
+      clearPendingAddFilterTimer();
+      if (event.detail > 1) return;
+      pendingAddFilterTimer = window.setTimeout(() => {
+        pendingAddFilterTimer = null;
+        addFilterFromElement(actionEl);
+      }, 220);
+      return;
+    }
     addFilterFromElement(actionEl);
     return;
   }
@@ -1140,9 +1218,9 @@ rootEl.addEventListener("click", async (event) => {
     setState({ filters: clearFilters(state.filters, viewId) });
     return;
   }
-  if (action === "toggle-show-archived-purchases") {
+  if (action === "toggle-show-archived-inventory") {
     const input = actionEl as HTMLInputElement;
-    setState({ showArchivedPurchases: input.checked });
+    setState({ showArchivedInventory: input.checked });
     return;
   }
   if (action === "toggle-show-archived-categories") {
@@ -1154,8 +1232,8 @@ rootEl.addEventListener("click", async (event) => {
     openModal({ kind: "categoryCreate" });
     return;
   }
-  if (action === "open-create-purchase") {
-    openModal({ kind: "purchaseCreate" });
+  if (action === "open-create-inventory") {
+    openModal({ kind: "inventoryCreate" });
     return;
   }
   if (action === "open-settings") {
@@ -1167,9 +1245,9 @@ rootEl.addEventListener("click", async (event) => {
     if (id) openModal({ kind: "categoryEdit", categoryId: id });
     return;
   }
-  if (action === "edit-purchase") {
+  if (action === "edit-inventory") {
     const id = actionEl.dataset.id;
-    if (id) openModal({ kind: "purchaseEdit", purchaseId: id });
+    if (id) openModal({ kind: "inventoryEdit", inventoryId: id });
     return;
   }
   if (action === "close-modal" || action === "close-modal-backdrop") {
@@ -1177,16 +1255,16 @@ rootEl.addEventListener("click", async (event) => {
     closeModal();
     return;
   }
-  if (action === "toggle-purchase-active") {
+  if (action === "toggle-inventory-active") {
     const id = actionEl.dataset.id;
     const next = actionEl.dataset.nextActive === "true";
-    if (id) await togglePurchaseActive(id, next);
+    if (id) await toggleInventoryActive(id, next);
     return;
   }
-  if (action === "toggle-purchase-archived") {
+  if (action === "toggle-inventory-archived") {
     const id = actionEl.dataset.id;
     const next = actionEl.dataset.nextArchived === "true";
-    if (id) await togglePurchaseArchived(id, next);
+    if (id) await toggleInventoryArchived(id, next);
     return;
   }
   if (action === "toggle-category-subtree-archived") {
@@ -1195,16 +1273,8 @@ rootEl.addEventListener("click", async (event) => {
     if (id) await setCategorySubtreeArchived(id, next);
     return;
   }
-  if (action === "refresh-export") {
-    setState({ exportText: buildExportJsonText() });
-    return;
-  }
   if (action === "download-json") {
     downloadTextFile(`investment-tracker-${new Date().toISOString().slice(0, 10)}.json`, buildExportJsonText(), "application/json");
-    return;
-  }
-  if (action === "download-csv") {
-    downloadTextFile(`investment-tracker-${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(), "text/csv;charset=utf-8");
     return;
   }
   if (action === "replace-import") {
@@ -1219,9 +1289,33 @@ rootEl.addEventListener("click", async (event) => {
     }
     if (!window.confirm("Wipe all IndexedDB data? This cannot be undone.")) return;
     await clearAllData();
-    setState({ filters: [], exportText: "", importText: "", showArchivedPurchases: false, showArchivedCategories: false });
+    setState({ filters: [], exportText: "", importText: "", showArchivedInventory: false, showArchivedCategories: false });
     await reloadData();
     return;
+  }
+});
+
+rootEl.addEventListener("dblclick", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  clearPendingAddFilterTimer();
+  if (target.closest("input, select, textarea, label")) return;
+  const interactiveButton = target.closest<HTMLElement>("button");
+  if (interactiveButton && !interactiveButton.classList.contains("link-cell")) return;
+  if (target.closest("a")) return;
+
+  const row = target.closest<HTMLTableRowElement>("tr[data-row-edit]");
+  if (!row) return;
+  const id = row.dataset.id;
+  const rowEdit = row.dataset.rowEdit;
+  if (!id || !rowEdit) return;
+
+  if (rowEdit === "purchase") {
+    openModal({ kind: "inventoryEdit", inventoryId: id });
+    return;
+  }
+  if (rowEdit === "category") {
+    openModal({ kind: "categoryEdit", categoryId: id });
   }
 });
 
@@ -1237,8 +1331,8 @@ rootEl.addEventListener("submit", async (event) => {
     await handleCategorySubmit(form);
     return;
   }
-  if (form.id === "purchase-form") {
-    await handlePurchaseSubmit(form);
+  if (form.id === "inventory-form") {
+    await handleInventorySubmit(form);
     return;
   }
 });
@@ -1248,8 +1342,8 @@ rootEl.addEventListener("input", (event) => {
   if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) return;
   if (target.name === "quantity" || target.name === "totalPrice") {
     const form = target.closest("form");
-    if (form instanceof HTMLFormElement && form.id === "purchase-form") {
-      syncPurchaseFormUnitPrice(form);
+    if (form instanceof HTMLFormElement && form.id === "inventory-form") {
+      syncInventoryFormUnitPrice(form);
     }
   }
   if (target.id === "import-text") {

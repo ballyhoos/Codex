@@ -1,4 +1,4 @@
-import type { CategoryNode, PurchaseRecord } from "./types";
+import type { CategoryNode, InventoryRecord } from "./types";
 
 export function buildCategoryMaps(categories: CategoryNode[]) {
   const byId = new Map(categories.map((c) => [c.id, c]));
@@ -60,7 +60,7 @@ export function collectSubtreeIds(categories: CategoryNode[], rootId: string): s
 }
 
 export function computeCategoryTotals(
-  filteredActiveNonArchivedPurchases: PurchaseRecord[],
+  filteredActiveNonArchivedInventoryRecords: InventoryRecord[],
   categories: CategoryNode[],
 ): Map<string, number> {
   const descendants = buildDescendantMap(categories);
@@ -69,7 +69,7 @@ export function computeCategoryTotals(
   for (const c of categories) {
     const subtree = descendants.get(c.id) || new Set([c.id]);
     let sum = 0;
-    for (const p of filteredActiveNonArchivedPurchases) {
+    for (const p of filteredActiveNonArchivedInventoryRecords) {
       if (subtree.has(p.categoryId)) sum += p.totalPriceCents;
     }
     totals.set(c.id, sum);

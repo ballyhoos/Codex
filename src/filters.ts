@@ -1,5 +1,11 @@
 import type { ColumnDef, FilterClause, ViewId } from "./types";
 
+function isEmptyValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  return false;
+}
+
 export function addFilter(filters: FilterClause[], next: Omit<FilterClause, "id">): FilterClause[] {
   const exists = filters.some(
     (f) =>
@@ -39,6 +45,8 @@ export function applyViewFilters<Row>(
       const raw = col.getValue(row);
 
       if (f.op === "eq") return String(raw) === f.value;
+      if (f.op === "isEmpty") return isEmptyValue(raw);
+      if (f.op === "isNotEmpty") return !isEmptyValue(raw);
       if (f.op === "contains") {
         return String(raw).toLowerCase().includes(f.value.toLowerCase());
       }
