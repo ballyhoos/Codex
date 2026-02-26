@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "build:single-html": "node scripts/build-single-html.mjs",
-    "build:single-html:full": "npm run build && npm run build:single-html"
+    "build:single-html:full": "npm run build && npm run build:single-html",
+    "single": "npm run build:single-html",
+    "single:full": "npm run build:single-html:full"
   },
   "dependencies": {
     "idb": "^8.0.0"

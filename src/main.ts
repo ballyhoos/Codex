@@ -448,14 +448,14 @@ function getDerived() {
     inventoryColumns,
     { categoryDescendantsMap },
   );
+  const persistentInventoryForCategoryMetrics = state.inventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
 
   const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
-  const totalsInput = filteredInventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
-  const categoryTotals = computeCategoryTotals(totalsInput, visibleCategoriesForTotals);
+  const categoryTotals = computeCategoryTotals(persistentInventoryForCategoryMetrics, visibleCategoriesForTotals);
   const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
   const categoryItems = new Map<string, number>();
   const categoryQty = new Map<string, number>();
-  for (const p of filteredInventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics)) {
+  for (const p of persistentInventoryForCategoryMetrics) {
     const purchaseCategory = categoriesById.get(p.categoryId);
     if (!purchaseCategory) continue;
     for (const categoryId of purchaseCategory.pathIds) {
@@ -1273,21 +1273,51 @@ function addFilterFromElement(el: HTMLElement) {
   const label = el.dataset.label;
   if (!viewId || !field || !op || value == null || !label) return;
 
+  const matchesFilter = (f: FilterClause, candidate: Pick<FilterClause, "viewId" | "field" | "op" | "value">) =>
+    f.viewId === candidate.viewId &&
+    f.field === candidate.field &&
+    f.op === candidate.op &&
+    f.value === candidate.value;
+
   let nextFilters = addFilter(state.filters, { viewId, field, op, value, label });
   const crossInventoryCategoryId = el.dataset.crossInventoryCategoryId;
   if (crossInventoryCategoryId) {
     const category = getCategoryById(crossInventoryCategoryId);
     if (category) {
-      nextFilters = nextFilters.filter(
-        (f) => !(f.viewId === "inventoryTable" && f.field === "categoryId" && f.op === "inCategorySubtree"),
-      );
-      nextFilters = addFilter(nextFilters, {
-        viewId: "inventoryTable",
-        field: "categoryId",
-        op: "inCategorySubtree",
-        value: category.id,
-        label: `Category / Path: ${category.pathNames.join(" / ")}`,
-      });
+      const parentFilter = nextFilters.find((f) => matchesFilter(f, { viewId, field, op, value }));
+      if (parentFilter) {
+        const childLabel = `Category / Path: ${category.pathNames.join(" / ")}`;
+        nextFilters = nextFilters.filter((f) => f.linkedToFilterId !== parentFilter.id);
+        const existingChildIndex = nextFilters.findIndex((f) =>
+          matchesFilter(f, {
+            viewId: "inventoryTable",
+            field: "categoryId",
+            op: "inCategorySubtree",
+            value: category.id,
+          }),
+        );
+        if (existingChildIndex >= 0) {
+          const existingChild = nextFilters[existingChildIndex];
+          nextFilters = [
+            ...nextFilters.slice(0, existingChildIndex),
+            { ...existingChild, label: childLabel, linkedToFilterId: parentFilter.id },
+            ...nextFilters.slice(existingChildIndex + 1),
+          ];
+        } else {
+          nextFilters = [
+            ...nextFilters,
+            {
+              id: crypto.randomUUID(),
+              viewId: "inventoryTable",
+              field: "categoryId",
+              op: "inCategorySubtree",
+              value: category.id,
+              label: childLabel,
+              linkedToFilterId: parentFilter.id,
+            },
+          ];
+        }
+      }
     }
   }
 

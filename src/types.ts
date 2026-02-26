@@ -54,6 +54,7 @@ export interface FilterClause {
   op: "eq" | "contains" | "inCategorySubtree" | "isEmpty" | "isNotEmpty";
   value: string;
   label: string;
+  linkedToFilterId?: string;
 }
 
 export interface ColumnDef<Row> {

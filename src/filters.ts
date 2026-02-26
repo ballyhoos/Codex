@@ -19,7 +19,18 @@ export function addFilter(filters: FilterClause[], next: Omit<FilterClause, "id"
 }
 
 export function removeFilter(filters: FilterClause[], id: string): FilterClause[] {
-  return filters.filter((f) => f.id !== id);
+  const idsToRemove = new Set<string>([id]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const filter of filters) {
+      if (filter.linkedToFilterId && idsToRemove.has(filter.linkedToFilterId) && !idsToRemove.has(filter.id)) {
+        idsToRemove.add(filter.id);
+        changed = true;
+      }
+    }
+  }
+  return filters.filter((f) => !idsToRemove.has(f.id));
 }
 
 export function clearFilters(filters: FilterClause[], viewId: ViewId): FilterClause[] {
