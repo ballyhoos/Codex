@@ -24,15 +24,9 @@ import type {
   ViewId,
 } from "./types";
 
-<<<<<<< Updated upstream
-const appEl = document.querySelector<HTMLDivElement>("#app") ?? (() => {
-  throw new Error("#app not found");
-})();
-=======
 const appEl = document.querySelector<HTMLDivElement>("#app");
 if (!appEl) throw new Error("#app not found");
 const rootEl: HTMLDivElement = appEl;
->>>>>>> Stashed changes
 
 let state: AppState = {
   purchases: [],

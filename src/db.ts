@@ -1,11 +1,36 @@
 import { openDB } from "idb";
+import type { DBSchema } from "idb";
 import type { AppSetting, CategoryNode, PurchaseRecord } from "./types";
 
-<<<<<<< Updated upstream
+interface TrackerDB extends DBSchema {
+  purchases: {
+    key: string;
+    value: PurchaseRecord;
+    indexes: {
+      by_purchaseDate: string;
+      by_productName: string;
+      by_categoryId: string;
+      by_active: number;
+      by_archived: number;
+      by_updatedAt: string;
+    };
+  };
+  categories: {
+    key: string;
+    value: CategoryNode;
+    indexes: {
+      by_parentId: string;
+      by_name: string;
+      by_isArchived: number;
+    };
+  };
+  settings: {
+    key: string;
+    value: AppSetting;
+  };
+}
 
-=======
->>>>>>> Stashed changes
-export const dbPromise = openDB("investment_purchase_tracker", 1, {
+export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
   async upgrade(db, _oldVersion, _newVersion, tx) {
     let purchasesStore = db.objectStoreNames.contains("purchases")
       ? tx.objectStore("purchases")
