@@ -59,6 +59,8 @@ let state: AppState = {
   showArchivedCategories: false,
   exportText: "",
   importText: "",
+  storageUsageBytes: null,
+  storageQuotaBytes: null,
 };
 
 const DEFAULT_CURRENCY = "USD";
@@ -88,6 +90,18 @@ function escapeHtml(value: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function formatMoney(cents: number): string {
@@ -276,7 +290,17 @@ async function reloadData() {
     await putSetting("currencySymbol", DEFAULT_CURRENCY_SYMBOL);
     settings.push({ key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL });
   }
-  state = { ...state, inventoryRecords, categories: normalizedCategories, settings };
+  let storageUsageBytes: number | null = null;
+  let storageQuotaBytes: number | null = null;
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    storageUsageBytes = typeof estimate?.usage === "number" ? estimate.usage : null;
+    storageQuotaBytes = typeof estimate?.quota === "number" ? estimate.quota : null;
+  } catch {
+    storageUsageBytes = null;
+    storageQuotaBytes = null;
+  }
+  state = { ...state, inventoryRecords, categories: normalizedCategories, settings, storageUsageBytes, storageQuotaBytes };
   render();
 }
 
@@ -811,6 +835,16 @@ function render() {
           <div>
             <div class="toolbar-row">
               <button type="button" class="btn btn-outline-primary btn-sm" data-action="download-json">Download JSON</button>
+            </div>
+            <div class="small text-body-secondary mb-2">
+              Storage used (browser estimate): ${
+                state.storageUsageBytes == null
+                  ? "Unavailable"
+                  : state.storageQuotaBytes == null
+                    ? escapeHtml(formatBytes(state.storageUsageBytes))
+                    : `${escapeHtml(formatBytes(state.storageUsageBytes))} of ${escapeHtml(formatBytes(state.storageQuotaBytes))}`
+              }
+              <span class="d-block">Includes this site origin storage (IndexedDB and possibly other browser storage).</span>
             </div>
             <label class="form-label">Export / Copy JSON
               <textarea class="form-control" id="export-text" rows="10" readonly>${escapeHtml(exportText)}</textarea>

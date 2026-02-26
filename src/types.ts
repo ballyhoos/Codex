@@ -72,4 +72,6 @@ export interface AppState {
   showArchivedCategories: boolean;
   exportText: string;
   importText: string;
+  storageUsageBytes: number | null;
+  storageQuotaBytes: number | null;
 }
