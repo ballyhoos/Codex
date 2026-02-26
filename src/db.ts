@@ -3,7 +3,7 @@ import type { DBSchema } from "idb";
 import type { AppSetting, CategoryNode, PurchaseRecord } from "./types";
 
 interface TrackerDB extends DBSchema {
-  purchases: {
+  inventory: {
     key: string;
     value: PurchaseRecord;
     indexes: {
@@ -32,17 +32,17 @@ interface TrackerDB extends DBSchema {
 
 export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
   async upgrade(db, _oldVersion, _newVersion, tx) {
-    let purchasesStore = db.objectStoreNames.contains("purchases")
-      ? tx.objectStore("purchases")
+    let inventoryStore = db.objectStoreNames.contains("inventory")
+      ? tx.objectStore("inventory")
       : null;
-    if (!db.objectStoreNames.contains("purchases")) {
-      purchasesStore = db.createObjectStore("purchases", { keyPath: "id" });
-      purchasesStore.createIndex("by_purchaseDate", "purchaseDate");
-      purchasesStore.createIndex("by_productName", "productName");
-      purchasesStore.createIndex("by_categoryId", "categoryId");
-      purchasesStore.createIndex("by_active", "active");
-      purchasesStore.createIndex("by_archived", "archived");
-      purchasesStore.createIndex("by_updatedAt", "updatedAt");
+    if (!db.objectStoreNames.contains("inventory")) {
+      inventoryStore = db.createObjectStore("inventory", { keyPath: "id" });
+      inventoryStore.createIndex("by_purchaseDate", "purchaseDate");
+      inventoryStore.createIndex("by_productName", "productName");
+      inventoryStore.createIndex("by_categoryId", "categoryId");
+      inventoryStore.createIndex("by_active", "active");
+      inventoryStore.createIndex("by_archived", "archived");
+      inventoryStore.createIndex("by_updatedAt", "updatedAt");
     }
 
     let categoriesStore = db.objectStoreNames.contains("categories")
@@ -60,8 +60,8 @@ export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
     }
 
     // Backfill defaults for older records if they exist.
-    if (purchasesStore) {
-      let cursor = await purchasesStore.openCursor();
+    if (inventoryStore) {
+      let cursor = await inventoryStore.openCursor();
       while (cursor) {
         const p = cursor.value as PurchaseRecord;
         let changed = false;
@@ -96,16 +96,16 @@ export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 1, {
   },
 });
 
-export async function listPurchases() {
-  return (await dbPromise).getAll("purchases");
+export async function listInventoryRecords() {
+  return (await dbPromise).getAll("inventory");
 }
 
-export async function putPurchase(record: PurchaseRecord) {
-  await (await dbPromise).put("purchases", record);
+export async function putInventoryRecord(record: PurchaseRecord) {
+  await (await dbPromise).put("inventory", record);
 }
 
-export async function getPurchase(id: string) {
-  return (await dbPromise).get("purchases", id);
+export async function getInventoryRecord(id: string) {
+  return (await dbPromise).get("inventory", id);
 }
 
 export async function listCategories() {
@@ -134,11 +134,11 @@ export async function replaceAllData(payload: {
   settings: AppSetting[];
 }) {
   const db = await dbPromise;
-  const tx = db.transaction(["purchases", "categories", "settings"], "readwrite");
-  await tx.objectStore("purchases").clear();
+  const tx = db.transaction(["inventory", "categories", "settings"], "readwrite");
+  await tx.objectStore("inventory").clear();
   await tx.objectStore("categories").clear();
   await tx.objectStore("settings").clear();
-  for (const p of payload.purchases) await tx.objectStore("purchases").put(p);
+  for (const p of payload.purchases) await tx.objectStore("inventory").put(p);
   for (const c of payload.categories) await tx.objectStore("categories").put(c);
   for (const s of payload.settings) await tx.objectStore("settings").put(s);
   await tx.done;
@@ -146,8 +146,8 @@ export async function replaceAllData(payload: {
 
 export async function clearAllData() {
   const db = await dbPromise;
-  const tx = db.transaction(["purchases", "categories", "settings"], "readwrite");
-  await tx.objectStore("purchases").clear();
+  const tx = db.transaction(["inventory", "categories", "settings"], "readwrite");
+  await tx.objectStore("inventory").clear();
   await tx.objectStore("categories").clear();
   await tx.objectStore("settings").clear();
   await tx.done;

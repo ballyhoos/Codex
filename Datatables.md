@@ -41,10 +41,18 @@ If you reproduce this elsewhere:
 
 Each DataTable section (e.g., Purchases / Categories) is structured as:
 
-1. Section header row (`title` + local controls like "Show archived")
+1. Section header row (`title` + local controls like "Show archived" + create button)
 2. Inline filter breadcrumb row
 3. DataTable
 4. DataTables controls row (below table)
+
+Section header action pattern (current):
+
+- Right side of the section header includes:
+  - `Show archived` toggle
+  - a section-level create button
+- Create button label convention is `Create New`
+- The create button opens the same modal used by the top/global action menu
 
 ## Filter Row Pattern (App-level filters)
 
@@ -190,6 +198,7 @@ Do not enable DataTables search unless product requirements are changed.
 2. Add DataTables + Bootstrap 5 integration (and jQuery if using jQuery build)
 3. Render table section with:
    - title row
+   - right-side controls (`Show archived` + `Create New`)
    - inline filter breadcrumb row
    - table
 4. Initialize DataTables with:

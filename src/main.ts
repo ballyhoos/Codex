@@ -2,12 +2,12 @@ import "./styles.css";
 import {
   clearAllData,
   getCategory,
-  getPurchase,
+  getInventoryRecord,
   listCategories,
-  listPurchases,
+  listInventoryRecords,
   listSettings,
   putCategory,
-  putPurchase,
+  putInventoryRecord,
   putSetting,
   replaceAllData,
 } from "./db";
@@ -194,6 +194,9 @@ function initDataTables() {
       searching: false,
       info: true,
       lengthChange: true,
+      language: {
+        emptyTable: "No categories",
+      },
       ordering: { handler: true, indicators: true },
       order: [],
       columnDefs: [{ targets: -1, orderable: false }],
@@ -209,6 +212,9 @@ function initDataTables() {
       searching: false,
       info: true,
       lengthChange: true,
+      language: {
+        emptyTable: "No inventory records",
+      },
       ordering: { handler: true, indicators: true },
       order: [],
       columnDefs: [{ targets: -1, orderable: false }],
@@ -246,8 +252,9 @@ function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInst
   }, true);
 }
 
+
 async function reloadData() {
-  const [purchases, categories, settings] = await Promise.all([listPurchases(), listCategories(), listSettings()]);
+  const [purchases, categories, settings] = await Promise.all([listInventoryRecords(), listCategories(), listSettings()]);
   const normalizedCategories = recomputeCategoryPaths(categories).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   if (!settings.some((s) => s.key === "currencyCode")) {
     await putSetting("currencyCode", DEFAULT_CURRENCY);
@@ -273,23 +280,28 @@ function moneyInputFromCents(cents: number | undefined): string {
   return (cents / 100).toFixed(2);
 }
 
+function syncPurchaseFormUnitPrice(form: HTMLFormElement) {
+  const qtyEl = form.querySelector<HTMLInputElement>('input[name="quantity"]');
+  const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
+  const unitEl = form.querySelector<HTMLInputElement>('input[name="unitPrice"]');
+  if (!qtyEl || !totalEl || !unitEl) return;
+
+  const quantity = Number(qtyEl.value);
+  const totalPriceCents = parseMoneyToCents(totalEl.value);
+  if (!Number.isFinite(quantity) || quantity <= 0 || totalPriceCents == null || totalPriceCents < 0) {
+    unitEl.value = "";
+    return;
+  }
+  unitEl.value = (Math.round(totalPriceCents / quantity) / 100).toFixed(2);
+}
+
 function getParentCategoryName(category: CategoryNode): string {
-  return category.parentId ? getCategoryById(category.parentId)?.name || "(Unknown)" : "(root)";
+  return category.parentId ? getCategoryById(category.parentId)?.name || "(Unknown)" : "";
 }
 
 function buildPurchaseColumns(): ColumnDef<PurchaseRecord>[] {
   return [
     { key: "productName", label: "Name", getValue: (r) => r.productName, getDisplay: (r) => r.productName, filterable: true, filterOp: "contains" },
-    { key: "quantity", label: "Qty", getValue: (r) => r.quantity, getDisplay: (r) => String(r.quantity), filterable: true, filterOp: "eq" },
-    { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq" },
-    {
-      key: "unitPriceCents",
-      label: "Unit",
-      getValue: (r) => r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity),
-      getDisplay: (r) => formatMoney(r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity)),
-      filterable: true,
-      filterOp: "eq",
-    },
     {
       key: "categoryId",
       label: "Category / Path",
@@ -298,8 +310,18 @@ function buildPurchaseColumns(): ColumnDef<PurchaseRecord>[] {
       filterable: true,
       filterOp: "inCategorySubtree",
     },
-    { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
+    {
+      key: "unitPriceCents",
+      label: "Unit",
+      getValue: (r) => r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity),
+      getDisplay: (r) => formatMoney(r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity)),
+      filterable: true,
+      filterOp: "eq",
+    },
+    { key: "quantity", label: "Qty", getValue: (r) => r.quantity, getDisplay: (r) => String(r.quantity), filterable: true, filterOp: "eq" },
+    { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq" },
     { key: "purchaseDate", label: "Date", getValue: (r) => r.purchaseDate, getDisplay: (r) => r.purchaseDate, filterable: true, filterOp: "eq" },
+    { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
   ];
 }
 
@@ -307,9 +329,7 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
   return [
     { key: "name", label: "Name", getValue: (r) => r.name, getDisplay: (r) => r.name, filterable: true, filterOp: "contains" },
     { key: "parent", label: "Parent", getValue: (r) => getParentCategoryName(r), getDisplay: (r) => getParentCategoryName(r), filterable: true, filterOp: "eq" },
-    { key: "depth", label: "Depth", getValue: (r) => r.depth, getDisplay: (r) => String(r.depth), filterable: true, filterOp: "eq" },
     { key: "path", label: "Path", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
-    { key: "active", label: "Active", getValue: (r) => !r.isArchived, getDisplay: (r) => (r.isArchived ? "Inactive" : "Active"), filterable: true, filterOp: "eq" },
   ];
 }
 
@@ -337,8 +357,25 @@ function getDerived() {
   const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
   const totalsInput = filteredPurchases.filter((p) => p.active && !p.archived);
   const categoryTotals = computeCategoryTotals(totalsInput, visibleCategoriesForTotals);
+  const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
+  const categoryItems = new Map<string, number>();
+  for (const p of filteredPurchases) {
+    const purchaseCategory = categoriesById.get(p.categoryId);
+    if (!purchaseCategory) continue;
+    for (const categoryId of purchaseCategory.pathIds) {
+      categoryItems.set(categoryId, (categoryItems.get(categoryId) || 0) + 1);
+    }
+  }
   const categoryColumns: ColumnDef<CategoryNode>[] = [
     ...baseCategoryColumns,
+    {
+      key: "computedItems",
+      label: "Items",
+      getValue: (r) => categoryItems.get(r.id) || 0,
+      getDisplay: (r) => String(categoryItems.get(r.id) || 0),
+      filterable: true,
+      filterOp: "eq",
+    },
     {
       key: "computedTotalCents",
       label: "Total",
@@ -347,6 +384,7 @@ function getDerived() {
       filterable: true,
       filterOp: "eq",
     },
+    { key: "active", label: "Active", getValue: (r) => !r.isArchived, getDisplay: (r) => (r.isArchived ? "Inactive" : "Active"), filterable: true, filterOp: "eq" },
   ];
 
   const filteredCategories = applyViewFilters(getCategoryBaseRows(), state.filters, "categoriesList", categoryColumns);
@@ -465,13 +503,15 @@ function renderModal(): string {
             <label class="form-label mb-0">Name<input class="form-control" name="name" required value="${escapeHtml(category?.name || "")}" /></label>
             <label>Parent category
               <select class="form-select" name="parentId">
-                <option value="">(root)</option>
+                <option value=""></option>
                 ${categoryOptions(excludedIds, category?.parentId || null)}
               </select>
             </label>
+            ${editing ? `
             <label class="form-label mb-0">Current total (read-only)
               <input class="form-control" value="${escapeHtml(formatMoney(currentTotal))}" disabled />
             </label>
+            ` : ""}
             <div class="modal-footer px-0 pb-0">
               ${editing && category ? `<button type="button" class="btn ${category.isArchived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-category-subtree-archived" data-id="${category.id}" data-next-archived="${String(!category.isArchived)}">${category.isArchived ? "Restore Record" : "Archive Record"}</button>` : ""}
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
@@ -490,7 +530,7 @@ function renderModal(): string {
         <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title-purchase" tabindex="-1">
           <div class="modal-header">
-            <h2 id="modal-title-purchase" class="modal-title fs-5">Create Purchase</h2>
+            <h2 id="modal-title-purchase" class="modal-title fs-5">Create Inventory Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
           <form id="purchase-form" class="modal-body d-grid gap-3">
@@ -500,7 +540,7 @@ function renderModal(): string {
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="" /></label>
             <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="" /></label>
             <label class="form-label mb-0">Total price<input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="" /></label>
-            <label class="form-label mb-0">Per-item price (optional)<input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" /></label>
+            <label class="form-label mb-0">Per-item price (auto)<input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled /></label>
             <label>Category
               <select class="form-select" name="categoryId" required>
                 <option value="">Select category</option>
@@ -511,7 +551,7 @@ function renderModal(): string {
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3"></textarea></label>
             <div class="modal-footer px-0 pb-0">
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Add purchase</button>
+              <button type="submit" class="btn btn-primary">Add Inventory Record</button>
             </div>
           </form>
         </div>
@@ -529,7 +569,7 @@ function renderModal(): string {
         <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title-purchase" tabindex="-1">
           <div class="modal-header">
-            <h2 id="modal-title-purchase" class="modal-title fs-5">Edit Purchase</h2>
+            <h2 id="modal-title-purchase" class="modal-title fs-5">Edit Inventory Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
           <form id="purchase-form" class="modal-body d-grid gap-3">
@@ -539,7 +579,7 @@ function renderModal(): string {
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="${escapeHtml(purchase.productName)}" /></label>
             <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="${escapeHtml(String(purchase.quantity))}" /></label>
             <label class="form-label mb-0">Total price<input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="${escapeHtml(moneyInputFromCents(purchase.totalPriceCents))}" /></label>
-            <label class="form-label mb-0">Per-item price (optional)<input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" /></label>
+            <label class="form-label mb-0">Per-item price (auto)<input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" disabled /></label>
             <label>Category
               <select class="form-select" name="categoryId" required>
                 <option value="">Select category</option>
@@ -551,7 +591,7 @@ function renderModal(): string {
             <div class="modal-footer px-0 pb-0">
               <button type="button" class="btn ${purchase.archived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-purchase-archived" data-id="${purchase.id}" data-next-archived="${String(!purchase.archived)}">${purchase.archived ? "Restore Record" : "Archive Record"}</button>
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save purchase</button>
+              <button type="submit" class="btn btn-primary">Save Inventory Record</button>
             </div>
           </form>
         </div>
@@ -610,8 +650,8 @@ function render() {
       <header class="page-header mb-2">
         <div class="section-head">
           <div>
-            <h1 class="display-6 mb-1">Investment Purchase Tracker</h1>
-            <p class="text-body-secondary mb-0">Local-only storage in IndexedDB. Totals reflect current purchase filters and include active, non-archived records only.</p>
+            <h1 class="display-6 mb-1">Investments</h1>
+            <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
             ${dataTablesStatusMessage ? `<div class="small mt-1 text-body-secondary">Table Status: ${escapeHtml(dataTablesStatusMessage)}</div>` : ""}
           </div>
           <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
@@ -621,22 +661,11 @@ function render() {
       <section class="card shadow-sm">
         <div class="card-body">
         <div class="section-head">
-          <h2 class="h5 mb-0">Actions</h2>
-          <div class="menu-bar">
-            <button type="button" class="btn btn-sm btn-primary action-menu-btn" data-action="open-create-category">New category</button>
-            <button type="button" class="btn btn-sm btn-success action-menu-btn" data-action="open-create-purchase">New purchase</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary action-menu-btn" data-action="open-settings">Settings</button>
-          </div>
-        </div>
-        <p class="muted text-body-secondary mb-0 mt-2">Create and edit records from modals. Saving updates the data and recalculates totals.</p>
-        </div>
-      </section>
-
-      <section class="card shadow-sm">
-        <div class="card-body">
-        <div class="section-head">
           <h2 class="h5 mb-0">Categories List</h2>
-          <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+          <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+            <button type="button" class="btn btn-sm btn-primary action-menu-btn" data-action="open-create-category">Create New</button>
+          </div>
         </div>
         ${renderFilterChips("categoriesList", "Category list")}
         <div class="table-wrap table-responsive">
@@ -648,7 +677,7 @@ function render() {
               </tr>
             </thead>
             <tbody>
-              ${categoriesRowsHtml || `<tr><td colspan="${categoryColumns.length + 1}" class="empty-cell">No categories</td></tr>`}
+              ${categoriesRowsHtml}
             </tbody>
           </table>
         </div>
@@ -658,10 +687,13 @@ function render() {
       <section class="card shadow-sm">
         <div class="card-body">
         <div class="section-head">
-          <h2 class="h5 mb-0">Purchases Table</h2>
-          <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-purchases" ${state.showArchivedPurchases ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+          <h2 class="h5 mb-0">Inventory</h2>
+          <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-purchases" ${state.showArchivedPurchases ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+            <button type="button" class="btn btn-sm btn-success action-menu-btn" data-action="open-create-purchase">Create New</button>
+          </div>
         </div>
-        ${renderFilterChips("purchasesTable", "Purchases")}
+        ${renderFilterChips("purchasesTable", "Inventory")}
         <div class="table-wrap table-responsive">
           <table id="purchases-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
@@ -671,7 +703,7 @@ function render() {
               </tr>
             </thead>
             <tbody>
-              ${purchasesRowsHtml || `<tr><td colspan="${purchaseColumns.length + 1}" class="empty-cell">No purchases</td></tr>`}
+              ${purchasesRowsHtml}
             </tbody>
           </table>
         </div>
@@ -713,6 +745,8 @@ function render() {
     </div>
     ${renderModal()}
   `;
+  const purchaseForm = rootEl.querySelector<HTMLFormElement>('#purchase-form');
+  if (purchaseForm) syncPurchaseFormUnitPrice(purchaseForm);
   syncModalFocus();
   initDataTables();
 }
@@ -865,8 +899,6 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
   const productName = String(fd.get("productName") || "").trim();
   const quantity = Number(fd.get("quantity"));
   const totalPriceCents = parseMoneyToCents(String(fd.get("totalPrice") || ""));
-  const unitPriceInput = String(fd.get("unitPrice") || "");
-  const unitPriceCents = unitPriceInput.trim() ? parseMoneyToCents(unitPriceInput) : null;
   const categoryId = String(fd.get("categoryId") || "");
   const active = fd.get("active") === "on";
   const notes = String(fd.get("notes") || "").trim();
@@ -883,33 +915,30 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
     alert("Total price is invalid.");
     return;
   }
-  if (unitPriceInput.trim() && (unitPriceCents == null || unitPriceCents < 0)) {
-    alert("Per-item price is invalid.");
-    return;
-  }
   if (!getCategoryById(categoryId)) {
     alert("Select a valid category.");
     return;
   }
+  const derivedUnitPriceCents = Math.round(totalPriceCents / quantity);
 
   if (mode === "edit") {
     if (!purchaseIdInput) return;
-    const existing = await getPurchase(purchaseIdInput);
+    const existing = await getInventoryRecord(purchaseIdInput);
     if (!existing) {
-      alert("Purchase not found.");
+      alert("Inventory record not found.");
       return;
     }
     existing.purchaseDate = purchaseDate;
     existing.productName = productName;
     existing.quantity = quantity;
     existing.totalPriceCents = totalPriceCents;
-    existing.unitPriceCents = unitPriceCents ?? Math.round(totalPriceCents / quantity);
-    existing.unitPriceSource = unitPriceCents != null ? "entered" : "derived";
+    existing.unitPriceCents = derivedUnitPriceCents;
+    existing.unitPriceSource = "derived";
     existing.categoryId = categoryId;
     existing.active = active;
     existing.notes = notes || undefined;
     existing.updatedAt = nowIso();
-    await putPurchase(existing);
+    await putInventoryRecord(existing);
     closeModal();
     await reloadData();
     return;
@@ -922,8 +951,8 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
     productName,
     quantity,
     totalPriceCents,
-    unitPriceCents: unitPriceCents ?? Math.round(totalPriceCents / quantity),
-    unitPriceSource: unitPriceCents != null ? "entered" : "derived",
+    unitPriceCents: derivedUnitPriceCents,
+    unitPriceSource: "derived",
     categoryId,
     active,
     archived: false,
@@ -932,28 +961,28 @@ async function handlePurchaseSubmit(form: HTMLFormElement) {
     updatedAt: now,
   };
 
-  await putPurchase(record);
+  await putInventoryRecord(record);
   closeModal();
   await reloadData();
 }
 
 async function togglePurchaseActive(id: string, nextActive: boolean) {
-  const rec = await getPurchase(id);
+  const rec = await getInventoryRecord(id);
   if (!rec) return;
   rec.active = nextActive;
   rec.updatedAt = nowIso();
-  await putPurchase(rec);
+  await putInventoryRecord(rec);
   await reloadData();
 }
 
 async function togglePurchaseArchived(id: string, nextArchived: boolean) {
-  const rec = await getPurchase(id);
+  const rec = await getInventoryRecord(id);
   if (!rec) return;
-  if (nextArchived && !window.confirm(`Archive purchase "${rec.productName}"?`)) return;
+  if (nextArchived && !window.confirm(`Archive inventory record "${rec.productName}"?`)) return;
   rec.archived = nextArchived;
   rec.archivedAt = nextArchived ? nowIso() : undefined;
   rec.updatedAt = nowIso();
-  await putPurchase(rec);
+  await putInventoryRecord(rec);
   await reloadData();
 }
 
@@ -1217,6 +1246,12 @@ rootEl.addEventListener("submit", async (event) => {
 rootEl.addEventListener("input", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) return;
+  if (target.name === "quantity" || target.name === "totalPrice") {
+    const form = target.closest("form");
+    if (form instanceof HTMLFormElement && form.id === "purchase-form") {
+      syncPurchaseFormUnitPrice(form);
+    }
+  }
   if (target.id === "import-text") {
     state = { ...state, importText: target.value };
   }

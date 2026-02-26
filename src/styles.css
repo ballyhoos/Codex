@@ -86,6 +86,25 @@ body {
   cursor: pointer;
 }
 
+.table-wrap table.dataTable thead th.dt-orderable-asc,
+.table-wrap table.dataTable thead th.dt-orderable-desc,
+.table-wrap table.dataTable thead th.dt-ordering-asc,
+.table-wrap table.dataTable thead th.dt-ordering-desc {
+  white-space: nowrap;
+}
+
+.table-wrap table.dataTable thead .dt-column-order {
+  display: none !important;
+}
+
+.table-wrap table.dataTable thead th.dt-type-numeric,
+.table-wrap table.dataTable thead td.dt-type-numeric,
+.table-wrap table.dataTable tbody td.dt-type-numeric,
+.table-wrap table.dataTable tfoot th.dt-type-numeric,
+.table-wrap table.dataTable tfoot td.dt-type-numeric {
+  text-align: center !important;
+}
+
 .compact-table {
   max-height: 280px;
 }
