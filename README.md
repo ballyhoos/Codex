@@ -1,2 +1,138 @@
-# Codex
-CodeX Test
+# Investment Purchase Tracker (Local-Only SPA)
+
+Pure front-end web app for tracking purchases of investment products.
+
+All user data is stored locally in the browser using IndexedDB. There is no backend, no server-side database, and no API for app data.
+
+## Current Tech Stack
+
+- `Vite`
+- `TypeScript`
+- `Vanilla JS` (ES modules, no framework)
+- `idb` (small IndexedDB wrapper library)
+- Native browser APIs (`Intl`, `Blob`, `URL.createObjectURL`)
+
+## Product Summary
+
+The app allows users to:
+
+- Create and manage categories/subcategories (multi-level tree)
+- Record purchases with pricing and quantity
+- Mark purchases as `active` or `inactive`
+- Soft-delete records via `archived` flags (archive/restore instead of delete)
+- View purchases and categories in table/list views
+- Click any displayed data value to add a filter chip (view-scoped filtering)
+- See category totals that reflect the current purchase-table filters
+- Export/import JSON and export CSV
+- Wipe all local IndexedDB data (explicit destructive action)
+
+## Core Business Rules (Important)
+
+### Local storage/privacy
+
+- Data is stored only in IndexedDB on the user's machine.
+- No purchase/category data is sent to any backend.
+
+### Purchase flags
+
+- `active = false`: record exists but does **not** count toward totals
+- `archived = true`: soft-deleted/hidden by default in list views
+
+### Totals semantics
+
+Category totals:
+
+- Reflect the **current purchase table filters**
+- Include only purchases where:
+  - `active === true`
+  - `archived === false`
+
+### Filtering semantics
+
+- All visible data columns in each list/table view are filterable.
+- Clicking a displayed value creates a breadcrumb/chip filter.
+- Multiple filters use `AND`.
+- Filters are view-scoped (`purchasesTable` vs `categoriesList`).
+
+## Data Model (Current)
+
+### `PurchaseRecord`
+
+- `id`
+- `purchaseDate` (`YYYY-MM-DD`)
+- `productName`
+- `quantity`
+- `totalPriceCents`
+- `unitPriceCents` (optional; can be derived)
+- `unitPriceSource` (`entered` | `derived`)
+- `categoryId`
+- `active`
+- `archived`
+- `archivedAt?`
+- `notes?`
+- `createdAt`
+- `updatedAt`
+
+### `CategoryNode`
+
+- `id`
+- `name`
+- `parentId`
+- `pathIds`
+- `pathNames`
+- `depth`
+- `sortOrder`
+- `isArchived`
+- `archivedAt?`
+- `createdAt`
+- `updatedAt`
+
+### `settings`
+
+- key/value records (currently includes app-wide `currencyCode`, default `USD`)
+
+## IndexedDB Schema
+
+Database name: `investment_purchase_tracker`
+
+Object stores:
+
+- `purchases`
+- `categories`
+- `settings`
+
+Indexes:
+
+- `purchases`: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
+- `categories`: `by_parentId`, `by_name`, `by_isArchived`
+
+## Project Structure (Current)
+
+- `/Users/me/Work/AI/Codex/src/main.ts`: SPA rendering, event handling, forms, tables, import/export/wipe actions
+- `/Users/me/Work/AI/Codex/src/db.ts`: IndexedDB init/schema/CRUD and replace-all/wipe helpers
+- `/Users/me/Work/AI/Codex/src/types.ts`: shared TypeScript types/interfaces
+- `/Users/me/Work/AI/Codex/src/filters.ts`: generic metadata-driven filtering and filter chip helpers
+- `/Users/me/Work/AI/Codex/src/totals.ts`: category tree traversal, descendants, totals
+- `/Users/me/Work/AI/Codex/src/styles.css`: UI styling
+
+## Development Notes For Future Changes
+
+- Keep the app backend-free and local-only unless explicitly requested.
+- Prefer soft delete (`archive/restore`) over per-record hard delete.
+- When adding new visible data columns to any list/table, make them filterable via `ColumnDef` metadata unless they are action columns.
+- Preserve totals semantics (filtered purchases only, active + non-archived only) unless product requirements change.
+- For schema changes, update IndexedDB version and add migration/backfill logic in `src/db.ts`.
+- Keep exports/imports backward-compatible where practical (default missing flags like `active`/`archived`).
+
+## Run Locally
+
+```bash
+npm install
+npm run dev
+```
+
+Build:
+
+```bash
+npm run build
+```
