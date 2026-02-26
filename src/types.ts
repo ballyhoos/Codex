@@ -25,6 +25,8 @@ export interface CategoryNode {
   pathNames: string[];
   depth: number;
   sortOrder: number;
+  evaluationMode?: "spot" | "snapshot";
+  spotValueCents?: number;
   active: boolean;
   isArchived: boolean;
   archivedAt?: string;

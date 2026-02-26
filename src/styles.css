@@ -162,7 +162,13 @@ body {
 }
 
 .row-inactive {
-  opacity: 0.7;
+  opacity: 1;
+}
+
+.row-inactive td:not(.actions-col-cell),
+.row-inactive th,
+.row-inactive .link-cell {
+  color: rgba(33, 37, 41, 0.5);
 }
 
 .row-archived {

@@ -359,8 +359,24 @@ function syncInventoryFormUnitPrice(form: HTMLFormElement) {
   unitEl.value = (Math.round(totalPriceCents / quantity) / 100).toFixed(2);
 }
 
+function syncCategoryEvaluationFields(form: HTMLFormElement) {
+  const evaluationEl = form.querySelector<HTMLSelectElement>('select[name="evaluationMode"]');
+  const spotGroupEl = form.querySelector<HTMLElement>("[data-spot-value-group]");
+  const spotInputEl = form.querySelector<HTMLInputElement>('input[name="spotValue"]');
+  if (!evaluationEl || !spotGroupEl || !spotInputEl) return;
+  const isSpot = evaluationEl.value === "spot";
+  spotGroupEl.hidden = !isSpot;
+  spotInputEl.disabled = !isSpot;
+}
+
 function getParentCategoryName(category: CategoryNode): string {
   return category.parentId ? getCategoryById(category.parentId)?.name || "(Unknown)" : "";
+}
+
+function formatCategoryEvaluationMode(category: CategoryNode): string {
+  if (category.evaluationMode === "spot") return "Spot";
+  if (category.evaluationMode === "snapshot") return "Snapshot";
+  return "";
 }
 
 function isInventoryRecordCountableForCategoryMetrics(record: InventoryRecord): boolean {
@@ -398,6 +414,15 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
     { key: "name", label: "Name", getValue: (r) => r.name, getDisplay: (r) => r.name, filterable: true, filterOp: "contains" },
     { key: "parent", label: "Parent", getValue: (r) => getParentCategoryName(r), getDisplay: (r) => getParentCategoryName(r), filterable: true, filterOp: "eq" },
     { key: "path", label: "Path", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
+    { key: "evaluationMode", label: "Evaluation", getValue: (r) => r.evaluationMode || "", getDisplay: (r) => formatCategoryEvaluationMode(r), filterable: true, filterOp: "eq" },
+    {
+      key: "spotValueCents",
+      label: "Value",
+      getValue: (r) => r.spotValueCents ?? "",
+      getDisplay: (r) => (r.spotValueCents == null ? "" : formatMoney(r.spotValueCents)),
+      filterable: true,
+      filterOp: "eq",
+    },
   ];
 }
 
@@ -412,6 +437,8 @@ function getCategoryBaseRows(): CategoryNode[] {
 function getDerived() {
   const inventoryColumns = buildInventoryColumns();
   const baseCategoryColumns = buildCategoryColumns();
+  const leadingCategoryColumns = baseCategoryColumns.filter((c) => c.key === "name" || c.key === "parent" || c.key === "path");
+  const trailingCategoryColumns = baseCategoryColumns.filter((c) => c.key !== "name" && c.key !== "parent" && c.key !== "path");
   const categoryDescendantsMap = buildDescendantMap(state.categories);
 
   const filteredInventoryRecords = applyViewFilters(
@@ -427,15 +454,17 @@ function getDerived() {
   const categoryTotals = computeCategoryTotals(totalsInput, visibleCategoriesForTotals);
   const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
   const categoryItems = new Map<string, number>();
+  const categoryQty = new Map<string, number>();
   for (const p of filteredInventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics)) {
     const purchaseCategory = categoriesById.get(p.categoryId);
     if (!purchaseCategory) continue;
     for (const categoryId of purchaseCategory.pathIds) {
       categoryItems.set(categoryId, (categoryItems.get(categoryId) || 0) + 1);
+      categoryQty.set(categoryId, (categoryQty.get(categoryId) || 0) + p.quantity);
     }
   }
   const categoryColumns: ColumnDef<CategoryNode>[] = [
-    ...baseCategoryColumns,
+    ...leadingCategoryColumns,
     {
       key: "computedItems",
       label: "Items",
@@ -445,10 +474,30 @@ function getDerived() {
       filterOp: "eq",
     },
     {
-      key: "computedTotalCents",
-      label: "Total",
+      key: "computedQty",
+      label: "Qty",
+      getValue: (r) => categoryQty.get(r.id) || 0,
+      getDisplay: (r) => String(categoryQty.get(r.id) || 0),
+      filterable: true,
+      filterOp: "eq",
+    },
+    {
+      key: "computedInvestmentCents",
+      label: "Investment",
       getValue: (r) => categoryTotals.get(r.id) || 0,
       getDisplay: (r) => formatMoney(categoryTotals.get(r.id) || 0),
+      filterable: true,
+      filterOp: "eq",
+    },
+    ...trailingCategoryColumns,
+    {
+      key: "computedTotalCents",
+      label: "Total",
+      getValue: (r) => (r.evaluationMode === "spot" && r.spotValueCents != null ? (categoryQty.get(r.id) || 0) * r.spotValueCents : ""),
+      getDisplay: (r) => {
+        if (r.evaluationMode !== "spot" || r.spotValueCents == null) return "";
+        return formatMoney((categoryQty.get(r.id) || 0) * r.spotValueCents);
+      },
       filterable: true,
       filterOp: "eq",
     },
@@ -511,6 +560,16 @@ function renderClickableCell<Row>(viewId: ViewId, row: Row, col: ColumnDef<Row>)
     const inactive = hasInactiveCategoryInPath(categoryId);
     return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}${inactive ? ' <i class="bi bi-exclamation-diamond-fill text-danger ms-1" aria-label="Inactive category path" title="Inactive category path"></i>' : ""}</span></button>`;
   }
+  if (viewId === "categoriesList" && col.key === "parent" && typeof row === "object" && row && "parentId" in (row as object)) {
+    const parentId = (row as { parentId?: unknown }).parentId;
+    if (typeof parentId === "string" && parentId) {
+      return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}" data-cross-inventory-category-id="${escapeHtml(parentId)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
+    }
+  }
+  if (viewId === "categoriesList" && (col.key === "name" || col.key === "path") && typeof row === "object" && row && "id" in (row as object)) {
+    const categoryId = String((row as Record<string, unknown>).id);
+    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}" data-cross-inventory-category-id="${escapeHtml(categoryId)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
+  }
   return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
 }
 
@@ -571,17 +630,6 @@ function renderModal(): string {
       buildInventoryColumns(),
       { categoryDescendantsMap },
     );
-    const currentTotal = category ? computeCategoryTotals(
-      filteredInventoryForCategoryStats.filter(isInventoryRecordCountableForCategoryMetrics),
-      state.categories.filter((c) => !c.isArchived),
-    ).get(category.id) || 0 : 0;
-    const currentItems = category
-      ? filteredInventoryForCategoryStats.filter((p) => {
-        if (!isInventoryRecordCountableForCategoryMetrics(p)) return false;
-        const purchaseCategory = getCategoryById(p.categoryId);
-        return purchaseCategory ? purchaseCategory.pathIds.includes(category.id) : false;
-      }).length
-      : 0;
     return `
       <div class="modal fade show d-block" data-action="close-modal-backdrop" tabindex="-1" role="presentation">
         <div class="modal-dialog modal-dialog-centered">
@@ -600,17 +648,21 @@ function renderModal(): string {
                 ${categoryOptions(excludedIds, category?.parentId || null)}
               </select>
             </label>
+            <label class="form-label mb-0">Evaluation
+              <select class="form-select" name="evaluationMode">
+                <option value="" ${!category?.evaluationMode ? "selected" : ""}></option>
+                <option value="spot" ${category?.evaluationMode === "spot" ? "selected" : ""}>Spot</option>
+                <option value="snapshot" ${category?.evaluationMode === "snapshot" ? "selected" : ""}>Snapshot</option>
+              </select>
+            </label>
+            <label class="form-label mb-0" data-spot-value-group ${category?.evaluationMode === "spot" ? "" : "hidden"}>
+              Value
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" step="0.01" min="0" name="spotValue" value="${escapeHtml(moneyInputFromCents(category?.spotValueCents))}" ${category?.evaluationMode === "spot" ? "" : "disabled"} />
+              </div>
+            </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
-            ${editing ? `
-            <label class="form-label mb-0">Items (read-only)
-              <input class="form-control" value="${escapeHtml(String(currentItems))}" disabled />
-            </label>
-            ` : ""}
-            ${editing ? `
-            <label class="form-label mb-0">Current total (read-only)
-              <input class="form-control" value="${escapeHtml(formatMoney(currentTotal))}" disabled />
-            </label>
-            ` : ""}
             <div class="modal-footer px-0 pb-0">
               ${editing && category ? `<button type="button" class="btn ${category.isArchived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-category-subtree-archived" data-id="${category.id}" data-next-archived="${String(!category.isArchived)}">${category.isArchived ? "Restore Record" : "Archive Record"}</button>` : ""}
               <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
@@ -873,6 +925,8 @@ function render() {
   `;
   const purchaseForm = rootEl.querySelector<HTMLFormElement>('#inventory-form');
   if (purchaseForm) syncInventoryFormUnitPrice(purchaseForm);
+  const categoryForm = rootEl.querySelector<HTMLFormElement>("#category-form");
+  if (categoryForm) syncCategoryEvaluationFields(categoryForm);
   syncModalFocus();
   initDataTables();
 }
@@ -925,8 +979,19 @@ async function handleCategorySubmit(form: HTMLFormElement) {
   const categoryIdInput = String(fd.get("categoryId") || "").trim();
   const name = String(fd.get("name") || "").trim();
   const parentIdRaw = String(fd.get("parentId") || "").trim();
+  const evaluationModeRaw = String(fd.get("evaluationMode") || "").trim();
+  const spotValueRaw = String(fd.get("spotValue") || "").trim();
   const active = fd.get("active") === "on";
+  const evaluationMode = evaluationModeRaw === "spot" || evaluationModeRaw === "snapshot" ? evaluationModeRaw : undefined;
+  const parsedSpotValueCents = evaluationMode === "spot"
+    ? (spotValueRaw ? parseMoneyToCents(spotValueRaw) : undefined)
+    : undefined;
   if (!name) return;
+  if (evaluationMode === "spot" && spotValueRaw && parsedSpotValueCents == null) {
+    alert("Spot value is invalid.");
+    return;
+  }
+  const spotValueCents = parsedSpotValueCents == null ? undefined : parsedSpotValueCents;
   const parentId = parentIdRaw || null;
   if (parentId && !getCategoryById(parentId)) {
     alert("Select a valid parent category.");
@@ -951,6 +1016,8 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     const parentChanged = existing.parentId !== parentId;
     existing.name = name;
     existing.parentId = parentId;
+    existing.evaluationMode = evaluationMode;
+    existing.spotValueCents = spotValueCents;
     existing.active = active;
     if (parentChanged) {
       existing.sortOrder = state.categories.filter((c) => c.parentId === parentId && c.id !== existing.id).length;
@@ -972,6 +1039,8 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     pathNames: [],
     depth: 0,
     sortOrder: siblingCount,
+    evaluationMode,
+    spotValueCents,
     active,
     isArchived: false,
     createdAt: now,
@@ -1071,6 +1140,9 @@ async function toggleInventoryArchived(id: string, nextArchived: boolean) {
   if (!rec) return;
   if (nextArchived && !window.confirm(`Archive inventory record "${rec.productName}"?`)) return;
   rec.archived = nextArchived;
+  if (nextArchived) {
+    rec.active = false;
+  }
   rec.archivedAt = nextArchived ? nowIso() : undefined;
   rec.updatedAt = nowIso();
   await putInventoryRecord(rec);
@@ -1086,6 +1158,9 @@ async function setCategorySubtreeArchived(categoryId: string, nextArchived: bool
     const cat = await getCategory(id);
     if (!cat) continue;
     cat.isArchived = nextArchived;
+    if (nextArchived) {
+      cat.active = false;
+    }
     cat.archivedAt = nextArchived ? timestamp : undefined;
     cat.updatedAt = timestamp;
     await putCategory(cat);
@@ -1103,6 +1178,8 @@ function normalizeImportedCategory(raw: any): CategoryNode {
     pathNames: Array.isArray(raw.pathNames) ? raw.pathNames.map(String) : [],
     depth: Number.isFinite(raw.depth) ? Number(raw.depth) : 0,
     sortOrder: Number.isFinite(raw.sortOrder) ? Number(raw.sortOrder) : 0,
+    evaluationMode: raw.evaluationMode === "spot" || raw.evaluationMode === "snapshot" ? raw.evaluationMode : "snapshot",
+    spotValueCents: raw.spotValueCents == null || raw.spotValueCents === "" ? undefined : Number(raw.spotValueCents),
     active: typeof raw.active === "boolean" ? raw.active : true,
     isArchived: typeof raw.isArchived === "boolean" ? raw.isArchived : false,
     archivedAt: raw.archivedAt ? String(raw.archivedAt) : undefined,
@@ -1196,8 +1273,26 @@ function addFilterFromElement(el: HTMLElement) {
   const label = el.dataset.label;
   if (!viewId || !field || !op || value == null || !label) return;
 
+  let nextFilters = addFilter(state.filters, { viewId, field, op, value, label });
+  const crossInventoryCategoryId = el.dataset.crossInventoryCategoryId;
+  if (crossInventoryCategoryId) {
+    const category = getCategoryById(crossInventoryCategoryId);
+    if (category) {
+      nextFilters = nextFilters.filter(
+        (f) => !(f.viewId === "inventoryTable" && f.field === "categoryId" && f.op === "inCategorySubtree"),
+      );
+      nextFilters = addFilter(nextFilters, {
+        viewId: "inventoryTable",
+        field: "categoryId",
+        op: "inCategorySubtree",
+        value: category.id,
+        label: `Category / Path: ${category.pathNames.join(" / ")}`,
+      });
+    }
+  }
+
   let nextState: Partial<AppState> = {
-    filters: addFilter(state.filters, { viewId, field, op, value, label }),
+    filters: nextFilters,
   };
   if (viewId === "inventoryTable" && field === "archived" && value === "true" && !state.showArchivedInventory) {
     nextState.showArchivedInventory = true;
@@ -1344,7 +1439,7 @@ rootEl.addEventListener("dblclick", (event) => {
   const rowEdit = row.dataset.rowEdit;
   if (!id || !rowEdit) return;
 
-  if (rowEdit === "purchase") {
+  if (rowEdit === "inventory") {
     openModal({ kind: "inventoryEdit", inventoryId: id });
     return;
   }
@@ -1387,6 +1482,13 @@ rootEl.addEventListener("input", (event) => {
 
 rootEl.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target instanceof HTMLSelectElement && target.name === "evaluationMode") {
+    const form = target.closest("form");
+    if (form instanceof HTMLFormElement && form.id === "category-form") {
+      syncCategoryEvaluationFields(form);
+    }
+    return;
+  }
   if (!(target instanceof HTMLInputElement)) return;
   if (target.id !== "import-file") return;
   const file = target.files?.[0];
