@@ -87,6 +87,33 @@ Important indexes:
 - Prefer schema migrations/backfills in `src/db.ts` over breaking old local data.
 - Keep import/export backward-compatible when possible (default missing flags like `active`, `archived`, `isArchived`).
 
+### UI / DataTable conventions (current)
+
+- The Categories and Purchases list views are Bootstrap-styled DataTables (client-side) initialized in `/Users/me/Work/AI/Codex/src/main.ts`.
+- DataTables currently run in `jQuery` plugin mode (CDN scripts + jQuery in `/Users/me/Work/AI/Codex/index.html`). Do not remove jQuery unless DataTables is migrated to a local/vanilla setup and verified.
+- App-level filtering remains the source of truth (filter chips/breadcrumbs). DataTables built-in search is disabled.
+- DataTables controls row (`Showing ... entries`, `entries per page`, pagination) must render **below** the table.
+- Data table wrappers should not use the old rounded bordered box style around the table.
+- Data tables use Bootstrap `table-striped`.
+- DataTables headers keep a light background style, but sticky header behavior is disabled for DataTables tables (sorting interaction must keep working).
+- Column alignment rule: all table columns (header + body) are left-aligned except the final Actions column.
+- Actions column rules:
+  - Header text is visually blank (accessible label only).
+  - Only the final Actions column is right-aligned.
+  - Action buttons are right-aligned within the cell and use the shared custom small button sizing (`action-menu-btn`).
+- Purchase table column layout (current):
+  - `Name` is the first column.
+  - `Date` appears immediately before the Actions column.
+  - The visible `Archived` column is removed (archived rows are shown visually instead).
+- Archived rows should appear grayed out (neutral gray styling), not danger/red-tinted.
+- Filter display above each DataTable:
+  - Inline breadcrumb-style path (no large boxed container).
+  - Prefix text is `Filter:`
+  - Divider is `>`
+  - Clicking a crumb removes that filter.
+  - `Clear Filter` button sits inline and right-aligned on the same row.
+- If changing visible table columns or ordering, keep the DataTables Actions column non-sortable and preserve current filterability expectations for visible data columns.
+
 ## Skills
 A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
 ### Available skills
