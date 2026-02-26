@@ -105,10 +105,25 @@ body {
   text-align: center !important;
 }
 
+.table-wrap table.dataTable thead th.col-align-right,
+.table-wrap table.dataTable thead td.col-align-right,
+.table-wrap table.dataTable tbody th.col-align-right,
+.table-wrap table.dataTable tbody td.col-align-right,
+.table-wrap table.dataTable tfoot th.col-align-right,
+.table-wrap table.dataTable tfoot td.col-align-right {
+  text-align: right !important;
+}
+
 .table-wrap table.dataTable tbody td.dt-type-numeric .link-cell,
 .table-wrap table.dataTable tfoot td.dt-type-numeric .link-cell,
 .table-wrap table.dataTable thead th.dt-type-numeric .link-cell {
   text-align: center !important;
+}
+
+.table-wrap table.dataTable tbody td.col-align-right .link-cell,
+.table-wrap table.dataTable tfoot td.col-align-right .link-cell,
+.table-wrap table.dataTable thead th.col-align-right .link-cell {
+  text-align: right !important;
 }
 
 .compact-table {

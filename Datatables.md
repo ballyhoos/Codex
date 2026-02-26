@@ -98,10 +98,19 @@ Strict alignment rule:
 
 - All columns are left-aligned (headers and body cells)
 - Only the final `Actions` column is right-aligned
+- Exception: currency/money columns are right-aligned (headers and body cells)
 
 Why:
 
 - DataTables may auto-right-align numeric columns; this app intentionally overrides that behavior for consistency.
+- Money values are intentionally right-aligned for readability/comparison (expected financial table behavior).
+
+Money column implementation rule (current pattern):
+
+- Use column metadata (e.g. `ColumnDef.align = "right"`) rather than ad-hoc CSS per column position/name
+- Apply the alignment class to both `<th>` and `<td>`
+- If cells render clickable inner content (e.g. `.link-cell`), also force the inner content to inherit/right-align
+- This keeps money alignment stable when columns are reordered
 
 ## Actions Column Conventions
 
@@ -210,6 +219,7 @@ Do not enable DataTables search unless product requirements are changed.
    - controls row placed below table
 5. Apply alignment overrides:
    - all left
+   - money/currency columns right (metadata-driven)
    - last Actions column right
 6. Use inner wrapper for action buttons (avoid flex on `<td>`)
 7. Apply shared small action button size class

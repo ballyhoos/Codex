@@ -379,6 +379,10 @@ function formatCategoryEvaluationMode(category: CategoryNode): string {
   return "";
 }
 
+function getColumnAlignClass<Row>(col: ColumnDef<Row>): string {
+  return col.align === "right" ? "col-align-right" : col.align === "center" ? "col-align-center" : "";
+}
+
 function isInventoryRecordCountableForCategoryMetrics(record: InventoryRecord): boolean {
   return record.active && !record.archived;
 }
@@ -394,6 +398,7 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
       filterable: true,
       filterOp: "inCategorySubtree",
     },
+    { key: "quantity", label: "Qty", getValue: (r) => r.quantity, getDisplay: (r) => String(r.quantity), filterable: true, filterOp: "eq" },
     {
       key: "unitPriceCents",
       label: "Unit",
@@ -401,9 +406,9 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
       getDisplay: (r) => formatMoney(r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity)),
       filterable: true,
       filterOp: "eq",
+      align: "right",
     },
-    { key: "quantity", label: "Qty", getValue: (r) => r.quantity, getDisplay: (r) => String(r.quantity), filterable: true, filterOp: "eq" },
-    { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq" },
+    { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq", align: "right" },
     { key: "purchaseDate", label: "Date", getValue: (r) => r.purchaseDate, getDisplay: (r) => r.purchaseDate, filterable: true, filterOp: "eq" },
     { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
   ];
@@ -422,6 +427,7 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
       getDisplay: (r) => (r.spotValueCents == null ? "" : formatMoney(r.spotValueCents)),
       filterable: true,
       filterOp: "eq",
+      align: "right",
     },
   ];
 }
@@ -488,6 +494,7 @@ function getDerived() {
       getDisplay: (r) => formatMoney(categoryTotals.get(r.id) || 0),
       filterable: true,
       filterOp: "eq",
+      align: "right",
     },
     ...trailingCategoryColumns,
     {
@@ -500,6 +507,7 @@ function getDerived() {
       },
       filterable: true,
       filterOp: "eq",
+      align: "right",
     },
     { key: "active", label: "Active", getValue: (r) => r.active && !r.isArchived, getDisplay: (r) => (r.active && !r.isArchived ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
   ];
@@ -550,27 +558,28 @@ function renderClickableCell<Row>(viewId: ViewId, row: Row, col: ColumnDef<Row>)
   const rawValue = col.getValue(row);
   const display = col.getDisplay(row);
   const value = rawValue == null ? "" : String(rawValue);
+  const alignClass = col.align === "right" ? "text-end" : col.align === "center" ? "text-center" : "text-start";
   if (!col.filterable) return escapeHtml(display);
   const isEmptyDisplay = display.trim() === "";
   if (isEmptyDisplay) {
-    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="isEmpty" data-value="" data-label="${escapeHtml(`${col.label}: Empty`)}" title="Filter ${escapeHtml(col.label)} by empty value"><span class="filter-hit">—</span></button>`;
+    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent ${alignClass} align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="isEmpty" data-value="" data-label="${escapeHtml(`${col.label}: Empty`)}" title="Filter ${escapeHtml(col.label)} by empty value"><span class="filter-hit">—</span></button>`;
   }
   if (viewId === "inventoryTable" && col.key === "categoryId" && typeof row === "object" && row && "categoryId" in (row as object)) {
     const categoryId = String((row as Record<string, unknown>).categoryId);
     const inactive = hasInactiveCategoryInPath(categoryId);
-    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}${inactive ? ' <i class="bi bi-exclamation-diamond-fill text-danger ms-1" aria-label="Inactive category path" title="Inactive category path"></i>' : ""}</span></button>`;
+    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent ${alignClass} align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}${inactive ? ' <i class="bi bi-exclamation-diamond-fill text-danger ms-1" aria-label="Inactive category path" title="Inactive category path"></i>' : ""}</span></button>`;
   }
   if (viewId === "categoriesList" && col.key === "parent" && typeof row === "object" && row && "parentId" in (row as object)) {
     const parentId = (row as { parentId?: unknown }).parentId;
     if (typeof parentId === "string" && parentId) {
-      return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}" data-cross-inventory-category-id="${escapeHtml(parentId)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
+      return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent ${alignClass} align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}" data-cross-inventory-category-id="${escapeHtml(parentId)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
     }
   }
   if (viewId === "categoriesList" && (col.key === "name" || col.key === "path") && typeof row === "object" && row && "id" in (row as object)) {
     const categoryId = String((row as Record<string, unknown>).id);
-    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}" data-cross-inventory-category-id="${escapeHtml(categoryId)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
+    return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent ${alignClass} align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}" data-cross-inventory-category-id="${escapeHtml(categoryId)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
   }
-  return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent text-start align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
+  return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent ${alignClass} align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
 }
 
 function renderModal(): string {
@@ -792,7 +801,7 @@ function render() {
       const rowClass = [!isInventoryRecordEffectivelyActive(p) ? "row-inactive" : "", p.archived ? "row-archived" : ""].filter(Boolean).join(" ");
       return `
         <tr class="${rowClass}" data-row-edit="inventory" data-id="${p.id}">
-          ${inventoryColumns.map((col) => `<td>${renderClickableCell("inventoryTable", p, col)}</td>`).join("")}
+          ${inventoryColumns.map((col) => `<td class="${getColumnAlignClass(col)}">${renderClickableCell("inventoryTable", p, col)}</td>`).join("")}
           <td class="actions-col-cell">
             <div class="actions-cell">
               <button type="button" class="btn btn-sm btn-outline-primary action-menu-btn" data-action="edit-inventory" data-id="${p.id}">Edit</button>
@@ -806,7 +815,7 @@ function render() {
   const categoriesRowsHtml = filteredCategories
     .map((c) => `
       <tr class="${[!c.active ? "row-inactive" : "", c.isArchived ? "row-archived" : ""].filter(Boolean).join(" ")}" data-row-edit="category" data-id="${c.id}">
-        ${categoryColumns.map((col) => `<td>${renderClickableCell("categoriesList", c, col)}</td>`).join("")}
+        ${categoryColumns.map((col) => `<td class="${getColumnAlignClass(col)}">${renderClickableCell("categoriesList", c, col)}</td>`).join("")}
         <td class="actions-col-cell">
           <div class="actions-cell">
             <button type="button" class="btn btn-sm btn-outline-primary action-menu-btn" data-action="edit-category" data-id="${c.id}">Edit</button>
@@ -842,7 +851,7 @@ function render() {
           <table id="categories-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
-                ${categoryColumns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}
+                ${categoryColumns.map((c) => `<th class="${getColumnAlignClass(c)}">${escapeHtml(c.label)}</th>`).join("")}
                 <th class="actions-col" aria-label="Actions"></th>
               </tr>
             </thead>
@@ -868,7 +877,7 @@ function render() {
           <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
-                ${inventoryColumns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}
+                ${inventoryColumns.map((c) => `<th class="${getColumnAlignClass(c)}">${escapeHtml(c.label)}</th>`).join("")}
                 <th class="actions-col" aria-label="Actions"></th>
               </tr>
             </thead>

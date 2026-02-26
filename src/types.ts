@@ -64,6 +64,7 @@ export interface ColumnDef<Row> {
   getDisplay: (row: Row) => string;
   filterable: boolean;
   filterOp?: "eq" | "contains" | "inCategorySubtree";
+  align?: "left" | "center" | "right";
 }
 
 export interface AppState {
