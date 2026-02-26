@@ -24,9 +24,15 @@ import type {
   ViewId,
 } from "./types";
 
+<<<<<<< Updated upstream
 const appEl = document.querySelector<HTMLDivElement>("#app") ?? (() => {
   throw new Error("#app not found");
 })();
+=======
+const appEl = document.querySelector<HTMLDivElement>("#app");
+if (!appEl) throw new Error("#app not found");
+const rootEl: HTMLDivElement = appEl;
+>>>>>>> Stashed changes
 
 let state: AppState = {
   purchases: [],
@@ -260,7 +266,7 @@ function render() {
     })
     .join("");
 
-  appEl.innerHTML = `
+  rootEl.innerHTML = `
     <div class="app-shell">
       <header class="page-header">
         <h1>Investment Purchase Tracker</h1>
@@ -720,7 +726,7 @@ function addFilterFromElement(el: HTMLElement) {
   setState(nextState);
 }
 
-appEl.addEventListener("click", async (event) => {
+rootEl.addEventListener("click", async (event) => {
   const target = getEventTargetElement(event);
   if (!target) return;
   const actionEl = target.closest<HTMLElement>("[data-action]");
@@ -807,7 +813,7 @@ appEl.addEventListener("click", async (event) => {
   }
 });
 
-appEl.addEventListener("submit", async (event) => {
+rootEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) return;
@@ -825,7 +831,7 @@ appEl.addEventListener("submit", async (event) => {
   }
 });
 
-appEl.addEventListener("input", (event) => {
+rootEl.addEventListener("input", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) return;
   if (target.id === "import-text") {
@@ -833,7 +839,7 @@ appEl.addEventListener("input", (event) => {
   }
 });
 
-appEl.addEventListener("change", async (event) => {
+rootEl.addEventListener("change", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
   if (target.id !== "import-file") return;

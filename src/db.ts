@@ -1,7 +1,10 @@
 import { openDB } from "idb";
 import type { AppSetting, CategoryNode, PurchaseRecord } from "./types";
 
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
 export const dbPromise = openDB("investment_purchase_tracker", 1, {
   async upgrade(db, _oldVersion, _newVersion, tx) {
     let purchasesStore = db.objectStoreNames.contains("purchases")
