@@ -49,6 +49,8 @@ let inventoryTableDt: DataTableInstanceLike | null = null;
 let dataTablesLoadHookAttached = false;
 let dataTablesRetryTimer: number | null = null;
 let pendingAddFilterTimer: number | null = null;
+let hoveredFilterSectionViewId: ViewId | null = null;
+let dataToolsOpen = false;
 
 let state: AppState = {
   inventoryRecords: [],
@@ -392,7 +394,7 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
     { key: "productName", label: "Name", getValue: (r) => r.productName, getDisplay: (r) => r.productName, filterable: true, filterOp: "contains" },
     {
       key: "categoryId",
-      label: "Category / Path",
+      label: "Market",
       getValue: (r) => r.categoryId,
       getDisplay: (r) => getCategoryPathLabelWithStatus(r.categoryId),
       filterable: true,
@@ -418,7 +420,7 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
   return [
     { key: "name", label: "Name", getValue: (r) => r.name, getDisplay: (r) => r.name, filterable: true, filterOp: "contains" },
     { key: "parent", label: "Parent", getValue: (r) => getParentCategoryName(r), getDisplay: (r) => getParentCategoryName(r), filterable: true, filterOp: "eq" },
-    { key: "path", label: "Path", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
+    { key: "path", label: "Market", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
     { key: "evaluationMode", label: "Evaluation", getValue: (r) => r.evaluationMode || "", getDisplay: (r) => formatCategoryEvaluationMode(r), filterable: true, filterOp: "eq" },
     {
       key: "spotValueCents",
@@ -471,14 +473,6 @@ function getDerived() {
   }
   const categoryColumns: ColumnDef<CategoryNode>[] = [
     ...leadingCategoryColumns,
-    {
-      key: "computedItems",
-      label: "Items",
-      getValue: (r) => categoryItems.get(r.id) || 0,
-      getDisplay: (r) => String(categoryItems.get(r.id) || 0),
-      filterable: true,
-      filterOp: "eq",
-    },
     {
       key: "computedQty",
       label: "Qty",
@@ -582,6 +576,35 @@ function renderClickableCell<Row>(viewId: ViewId, row: Row, col: ColumnDef<Row>)
   return `<button type="button" class="link-cell btn btn-sm p-0 border-0 bg-transparent ${alignClass} align-baseline" data-action="add-filter" data-view-id="${viewId}" data-field="${escapeHtml(col.key)}" data-op="${escapeHtml(col.filterOp || "eq")}" data-value="${escapeHtml(value)}" data-label="${escapeHtml(`${col.label}: ${display}`)}"><span class="filter-hit">${escapeHtml(display)}</span></button>`;
 }
 
+function formatFooterNumber(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  if (Number.isInteger(value)) return String(value);
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
+function renderTableFooter<Row>(columns: ColumnDef<Row>[], rows: Row[]): string {
+  const cells = columns.map((col, index) => {
+    let sum = 0;
+    let hasNumeric = false;
+    for (const row of rows) {
+      const raw = col.getValue(row);
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        sum += raw;
+        hasNumeric = true;
+      }
+    }
+    const text = hasNumeric
+      ? (String(col.key).toLowerCase().includes("cents") ? formatMoney(sum) : formatFooterNumber(sum))
+      : (index === 0 ? "Totals" : "");
+    return `<th class="${getColumnAlignClass(col)}">${escapeHtml(text)}</th>`;
+  });
+  cells.push(`<th class="actions-col" aria-hidden="true"></th>`);
+  return `<tfoot><tr>${cells.join("")}</tr></tfoot>`;
+}
+
 function renderModal(): string {
   if (modalState.kind === "none") return "";
   const currencySymbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
@@ -644,14 +667,14 @@ function renderModal(): string {
         <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title-category" tabindex="-1">
           <div class="modal-header">
-            <h2 id="modal-title-category" class="modal-title fs-5">${editing ? "Edit Category" : "Create Category"}</h2>
+            <h2 id="modal-title-category" class="modal-title fs-5">${editing ? "Edit Market" : "Create Market"}</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
           <form id="category-form" class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="${editing ? "edit" : "create"}" />
             <input type="hidden" name="categoryId" value="${escapeHtml(category?.id || "")}" />
             <label class="form-label mb-0">Name<input class="form-control" name="name" required value="${escapeHtml(category?.name || "")}" /></label>
-            <label>Parent category
+            <label>Parent market
               <select class="form-select" name="parentId">
                 <option value=""></option>
                 ${categoryOptions(excludedIds, category?.parentId || null)}
@@ -690,7 +713,7 @@ function renderModal(): string {
         <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title-purchase" tabindex="-1">
           <div class="modal-header">
-            <h2 id="modal-title-purchase" class="modal-title fs-5">Create Inventory Record</h2>
+            <h2 id="modal-title-purchase" class="modal-title fs-5">Create Investment Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
           <form id="inventory-form" class="modal-body d-grid gap-3">
@@ -711,9 +734,9 @@ function renderModal(): string {
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled />
               </div>
             </label>
-            <label>Category
+            <label>Market
               <select class="form-select" name="categoryId" required>
-                <option value="">Select category</option>
+                <option value="">Select market</option>
                 ${categoryOptions()}
               </select>
             </label>
@@ -739,7 +762,7 @@ function renderModal(): string {
         <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title-purchase" tabindex="-1">
           <div class="modal-header">
-            <h2 id="modal-title-purchase" class="modal-title fs-5">Edit Inventory Record</h2>
+            <h2 id="modal-title-purchase" class="modal-title fs-5">Edit Investment Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
           <form id="inventory-form" class="modal-body d-grid gap-3">
@@ -760,9 +783,9 @@ function renderModal(): string {
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" disabled />
               </div>
             </label>
-            <label>Category
+            <label>Market
               <select class="form-select" name="categoryId" required>
-                <option value="">Select category</option>
+                <option value="">Select market</option>
                 ${categoryOptions(undefined, purchase.categoryId)}
               </select>
             </label>
@@ -784,6 +807,10 @@ function renderModal(): string {
 }
 
 function render() {
+  const existingDataTools = rootEl.querySelector<HTMLDetailsElement>("details.details-card");
+  if (existingDataTools) {
+    dataToolsOpen = existingDataTools.open;
+  }
   destroyDataTables();
 
   const {
@@ -837,16 +864,16 @@ function render() {
         </div>
       </header>
 
-      <section class="card shadow-sm">
+      <section class="card shadow-sm" data-filter-section-view-id="categoriesList">
         <div class="card-body">
         <div class="section-head">
-          <h2 class="h5 mb-0">Categories</h2>
+          <h2 class="h5 mb-0">Markets</h2>
           <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
-        ${renderFilterChips("categoriesList", "Category list")}
+        ${renderFilterChips("categoriesList", "Markets")}
         <div class="table-wrap table-responsive">
           <table id="categories-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
@@ -858,21 +885,22 @@ function render() {
             <tbody>
               ${categoriesRowsHtml}
             </tbody>
+            ${renderTableFooter(categoryColumns, filteredCategories)}
           </table>
         </div>
         </div>
       </section>
 
-      <section class="card shadow-sm">
+      <section class="card shadow-sm" data-filter-section-view-id="inventoryTable">
         <div class="card-body">
         <div class="section-head">
-          <h2 class="h5 mb-0">Inventory</h2>
+          <h2 class="h5 mb-0">Investments</h2>
           <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
             <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
           </div>
         </div>
-        ${renderFilterChips("inventoryTable", "Inventory")}
+        ${renderFilterChips("inventoryTable", "Investments")}
         <div class="table-wrap table-responsive">
           <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
@@ -884,12 +912,13 @@ function render() {
             <tbody>
               ${inventoryRowsHtml}
             </tbody>
+            ${renderTableFooter(inventoryColumns, filteredInventoryRecords)}
           </table>
         </div>
         </div>
       </section>
 
-      <details class="card shadow-sm details-card">
+      <details class="card shadow-sm details-card" ${dataToolsOpen ? "open" : ""}>
         <summary class="card-header">Data Tools</summary>
         <div class="details-content card-body">
         <div class="tools-grid">
@@ -1003,7 +1032,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
   const spotValueCents = parsedSpotValueCents == null ? undefined : parsedSpotValueCents;
   const parentId = parentIdRaw || null;
   if (parentId && !getCategoryById(parentId)) {
-    alert("Select a valid parent category.");
+    alert("Select a valid parent market.");
     return;
   }
 
@@ -1011,7 +1040,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     if (!categoryIdInput) return;
     const existing = await getCategory(categoryIdInput);
     if (!existing) {
-      alert("Category not found.");
+      alert("Market not found.");
       return;
     }
     if (parentId === existing.id) {
@@ -1160,7 +1189,7 @@ async function toggleInventoryArchived(id: string, nextArchived: boolean) {
 
 async function setCategorySubtreeArchived(categoryId: string, nextArchived: boolean) {
   const rootCategory = getCategoryById(categoryId);
-  if (nextArchived && rootCategory && !window.confirm(`Archive category subtree "${rootCategory.pathNames.join(" / ")}"?`)) return;
+  if (nextArchived && rootCategory && !window.confirm(`Archive market subtree "${rootCategory.pathNames.join(" / ")}"?`)) return;
   const subtreeIds = collectSubtreeIds(state.categories, categoryId);
   const timestamp = nowIso();
   for (const id of subtreeIds) {
@@ -1295,7 +1324,7 @@ function addFilterFromElement(el: HTMLElement) {
     if (category) {
       const parentFilter = nextFilters.find((f) => matchesFilter(f, { viewId, field, op, value }));
       if (parentFilter) {
-        const childLabel = `Category / Path: ${category.pathNames.join(" / ")}`;
+        const childLabel = `Market: ${category.pathNames.join(" / ")}`;
         nextFilters = nextFilters.filter((f) => f.linkedToFilterId !== parentFilter.id);
         const existingChildIndex = nextFilters.findIndex((f) =>
           matchesFilter(f, {
@@ -1350,6 +1379,13 @@ function clearPendingAddFilterTimer() {
     window.clearTimeout(pendingAddFilterTimer);
     pendingAddFilterTimer = null;
   }
+}
+
+function removeLatestFilterForView(viewId: ViewId) {
+  const viewFilters = state.filters.filter((f) => f.viewId === viewId);
+  const latest = viewFilters[viewFilters.length - 1];
+  if (!latest) return;
+  setState({ filters: removeFilter(state.filters, latest.id) });
 }
 
 rootEl.addEventListener("click", async (event) => {
@@ -1536,8 +1572,33 @@ rootEl.addEventListener("change", async (event) => {
   setState({ importText: text });
 });
 
+rootEl.addEventListener("pointermove", (event) => {
+  const target = getEventTargetElement(event);
+  if (!target) return;
+  const section = target.closest<HTMLElement>("[data-filter-section-view-id]");
+  hoveredFilterSectionViewId = (section?.dataset.filterSectionViewId as ViewId | undefined) || null;
+});
+
+rootEl.addEventListener("pointerleave", () => {
+  hoveredFilterSectionViewId = null;
+});
+
 document.addEventListener("keydown", (event) => {
-  if (modalState.kind === "none") return;
+  if (modalState.kind === "none") {
+    if (event.key !== "Escape") return;
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    ) {
+      return;
+    }
+    if (!hoveredFilterSectionViewId) return;
+    event.preventDefault();
+    removeLatestFilterForView(hoveredFilterSectionViewId);
+    return;
+  }
 
   if (event.key === "Escape") {
     event.preventDefault();

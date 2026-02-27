@@ -70,6 +70,14 @@ body {
   background: var(--bs-light);
 }
 
+.table-wrap table.dataTable tfoot th,
+.table-wrap table.dataTable tfoot td {
+  background: rgba(var(--bs-success-rgb), 0.12);
+  border-top: 2px solid rgba(var(--bs-success-rgb), 0.3);
+  font-weight: 600;
+  color: var(--bs-emphasis-color);
+}
+
 .table-wrap table.dataTable thead th:not(.actions-col),
 .table-wrap table.dataTable thead td:not(.actions-col),
 .table-wrap table.dataTable tbody th:not(.actions-col-cell),

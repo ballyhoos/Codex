@@ -68,6 +68,13 @@ Rules:
 
 This filter row is app logic, not DataTables search.
 
+Keyboard shortcut convention (current):
+
+- When the pointer is over a DataTable section (`Categories` / `Inventory`), pressing `Esc` removes the most recently added filter crumb for that section only
+- This shortcut is section-scoped (hovered section determines target view)
+- If a modal is open, `Esc` continues to close the modal instead (modal behavior takes precedence)
+- The shortcut should not fire while typing in form fields (`input`, `textarea`, `select`)
+
 ## DataTables Controls Placement
 
 The row containing:
@@ -225,6 +232,7 @@ Do not enable DataTables search unless product requirements are changed.
 7. Apply shared small action button size class
 8. Gray out archived rows
 9. Verify header sorting still works after CSS changes
+10. (Optional, current app pattern) Add section-hover `Esc` shortcut to remove the latest app-level filter crumb for that table/view
 
 ## Where this is implemented in this repo
 
