@@ -97,6 +97,8 @@ export interface AppState {
   categories: CategoryNode[];
   settings: AppSetting[];
   valuationSnapshots: ValuationSnapshot[];
+  reportDateFrom: string;
+  reportDateTo: string;
   filters: FilterClause[];
   showArchivedInventory: boolean;
   showArchivedCategories: boolean;

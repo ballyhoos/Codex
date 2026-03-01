@@ -62,6 +62,8 @@ let state: AppState = {
   categories: [],
   settings: [],
   valuationSnapshots: [],
+  reportDateFrom: isoDateDaysAgo(365),
+  reportDateTo: new Date().toISOString().slice(0, 10),
   filters: [],
   showArchivedInventory: false,
   showArchivedCategories: false,
@@ -89,6 +91,12 @@ const CURRENCY_SYMBOL_OPTIONS = [
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isoDateDaysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
 }
 
 function escapeHtml(value: unknown): string {
@@ -717,6 +725,171 @@ function renderTableFooter<Row>(columns: ColumnDef<Row>[], rows: Row[]): string 
   return `<tfoot><tr>${cells.join("")}</tr></tfoot>`;
 }
 
+type GrowthReportRow = {
+  marketId: string;
+  marketLabel: string;
+  startValueCents: number | null;
+  endValueCents: number | null;
+  contributionsCents: number;
+  netGrowthCents: number | null;
+  growthPct: number | null;
+};
+
+function parseYyyyMmDdToMs(value: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  return Date.parse(`${value}T00:00:00Z`);
+}
+
+function normalizeScopeMarketIds(selectedMarketIds: Set<string>, descendants: Map<string, Set<string>>): string[] {
+  const ids = [...selectedMarketIds];
+  const normalized = ids.filter((id) => {
+    for (const other of ids) {
+      if (other === id) continue;
+      const subtree = descendants.get(other);
+      if (subtree?.has(id)) return false;
+    }
+    return true;
+  });
+  return normalized;
+}
+
+function getReportScopeMarketIds(categoryDescendantsMap: Map<string, Set<string>>): string[] {
+  const parentCategoryFilterIds = new Set(
+    state.filters
+      .filter((f) => f.viewId === "categoriesList")
+      .map((f) => f.id),
+  );
+  const linkedMarketIds = new Set(
+    state.filters
+      .filter(
+        (f) =>
+          f.viewId === "inventoryTable" &&
+          f.field === "categoryId" &&
+          f.op === "inCategorySubtree" &&
+          !!f.linkedToFilterId &&
+          parentCategoryFilterIds.has(f.linkedToFilterId),
+      )
+      .map((f) => f.value),
+  );
+  if (linkedMarketIds.size > 0) {
+    return normalizeScopeMarketIds(linkedMarketIds, categoryDescendantsMap);
+  }
+  return state.categories
+    .filter((c) => !c.isArchived && c.active && c.parentId == null)
+    .map((c) => c.id);
+}
+
+function pickBoundarySnapshotValueCents(capturedAtAsc: ValuationSnapshot[], boundaryMs: number): number | null {
+  if (!capturedAtAsc.length) return null;
+  let latestBeforeOrAt: ValuationSnapshot | null = null;
+  for (const snap of capturedAtAsc) {
+    const snapMs = Date.parse(snap.capturedAt);
+    if (!Number.isFinite(snapMs)) continue;
+    if (snapMs <= boundaryMs) {
+      latestBeforeOrAt = snap;
+      continue;
+    }
+    return latestBeforeOrAt ? latestBeforeOrAt.valueCents : snap.valueCents;
+  }
+  return latestBeforeOrAt ? latestBeforeOrAt.valueCents : null;
+}
+
+function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>): {
+  scopeMarketIds: string[];
+  rows: GrowthReportRow[];
+  startTotalCents: number;
+  endTotalCents: number;
+  contributionsTotalCents: number;
+  netGrowthTotalCents: number;
+} {
+  const fromMs = parseYyyyMmDdToMs(state.reportDateFrom);
+  const toMs = parseYyyyMmDdToMs(state.reportDateTo);
+  if (fromMs == null || toMs == null || fromMs > toMs) {
+    return {
+      scopeMarketIds: [],
+      rows: [],
+      startTotalCents: 0,
+      endTotalCents: 0,
+      contributionsTotalCents: 0,
+      netGrowthTotalCents: 0,
+    };
+  }
+
+  const scopeMarketIds = getReportScopeMarketIds(categoryDescendantsMap);
+  const marketSnapshotsById = new Map<string, ValuationSnapshot[]>();
+  for (const snap of state.valuationSnapshots) {
+    if (snap.scope !== "market" || !snap.marketId) continue;
+    const arr = marketSnapshotsById.get(snap.marketId) || [];
+    arr.push(snap);
+    marketSnapshotsById.set(snap.marketId, arr);
+  }
+  for (const arr of marketSnapshotsById.values()) {
+    arr.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
+  }
+
+  const activeNonArchivedInventory = state.inventoryRecords.filter((r) => r.active && !r.archived);
+  const rows: GrowthReportRow[] = [];
+  let startTotalCents = 0;
+  let endTotalCents = 0;
+  let contributionsTotalCents = 0;
+  let netGrowthTotalCents = 0;
+
+  for (const marketId of scopeMarketIds) {
+    const market = getCategoryById(marketId);
+    if (!market) continue;
+    const subtree = categoryDescendantsMap.get(marketId) || new Set([marketId]);
+    const snaps = marketSnapshotsById.get(marketId) || [];
+    const startValueCents = pickBoundarySnapshotValueCents(snaps, fromMs);
+    const endValueCents = pickBoundarySnapshotValueCents(snaps, toMs);
+    let contributionsCents = 0;
+    for (const rec of activeNonArchivedInventory) {
+      if (!subtree.has(rec.categoryId)) continue;
+      const purchaseMs = parseYyyyMmDdToMs(rec.purchaseDate);
+      if (purchaseMs == null) continue;
+      if (purchaseMs > fromMs && purchaseMs <= toMs) {
+        contributionsCents += rec.totalPriceCents;
+      }
+    }
+    const netGrowthCents =
+      startValueCents == null || endValueCents == null
+        ? null
+        : endValueCents - startValueCents - contributionsCents;
+    const growthPct =
+      netGrowthCents == null || startValueCents == null || startValueCents <= 0
+        ? null
+        : netGrowthCents / startValueCents;
+
+    if (startValueCents != null) startTotalCents += startValueCents;
+    if (endValueCents != null) endTotalCents += endValueCents;
+    contributionsTotalCents += contributionsCents;
+    if (netGrowthCents != null) netGrowthTotalCents += netGrowthCents;
+
+    rows.push({
+      marketId,
+      marketLabel: market.pathNames.join(" / "),
+      startValueCents,
+      endValueCents,
+      contributionsCents,
+      netGrowthCents,
+      growthPct,
+    });
+  }
+
+  return {
+    scopeMarketIds,
+    rows,
+    startTotalCents,
+    endTotalCents,
+    contributionsTotalCents,
+    netGrowthTotalCents,
+  };
+}
+
+function formatPercent(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
 function renderModal(): string {
   if (modalState.kind === "none") return "";
   const currencySymbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
@@ -928,10 +1101,13 @@ function render() {
   const {
     inventoryColumns,
     categoryColumns,
+    categoryDescendantsMap,
     filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
   } = getDerived();
+  const report = buildGrowthReportRows(categoryDescendantsMap);
+  const reportGrowthPct = report.startTotalCents > 0 ? report.netGrowthTotalCents / report.startTotalCents : null;
 
   const exportText = state.exportText || buildExportJsonText();
   const inventoryRowsHtml = filteredInventoryRecords
@@ -1030,6 +1206,65 @@ function render() {
             ${renderTableFooter(inventoryColumns, filteredInventoryRecords)}
           </table>
         </div>
+        </div>
+      </section>
+
+      <section class="card shadow-sm">
+        <div class="card-body">
+          <div class="section-head">
+            <h2 class="h5 mb-0">Growth Report</h2>
+            <span class="small text-body-secondary">
+              Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
+            </span>
+          </div>
+          <div class="d-flex align-items-end gap-2 flex-wrap my-2">
+            <label class="form-label mb-0">From
+              <input class="form-control form-control-sm" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
+            </label>
+            <label class="form-label mb-0">To
+              <input class="form-control form-control-sm" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
+            </label>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
+          </div>
+          ${report.rows.length === 0 ? `
+            <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
+          ` : `
+            <div class="small mb-2">
+              <strong>Portfolio:</strong>
+              Start ${formatMoney(report.startTotalCents)}
+              • End ${formatMoney(report.endTotalCents)}
+              • Contributions ${formatMoney(report.contributionsTotalCents)}
+              • Net Growth ${formatMoney(report.netGrowthTotalCents)}
+              • ${formatPercent(reportGrowthPct)}
+            </div>
+            <div class="table-wrap table-responsive">
+              <table class="table table-striped table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Market</th>
+                    <th class="text-end">Start</th>
+                    <th class="text-end">End</th>
+                    <th class="text-end">Contributions</th>
+                    <th class="text-end">Net Growth</th>
+                    <th class="text-end">Growth %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${report.rows.map((row) => `
+                    <tr>
+                      <td>${escapeHtml(row.marketLabel)}</td>
+                      <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
+                      <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
+                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
+                      <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
+                      <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          `}
         </div>
       </section>
 
@@ -1562,6 +1797,25 @@ rootEl.addEventListener("click", async (event) => {
     openModal({ kind: "settings" });
     return;
   }
+  if (action === "apply-report-range") {
+    const fromInput = rootEl.querySelector<HTMLInputElement>('input[name="reportDateFrom"]');
+    const toInput = rootEl.querySelector<HTMLInputElement>('input[name="reportDateTo"]');
+    if (!fromInput || !toInput) return;
+    const from = fromInput.value;
+    const to = toInput.value;
+    const fromMs = parseYyyyMmDdToMs(from);
+    const toMs = parseYyyyMmDdToMs(to);
+    if (fromMs == null || toMs == null || fromMs > toMs) {
+      setToast({ tone: "warning", text: "Select a valid report date range." });
+      return;
+    }
+    setState({ reportDateFrom: from, reportDateTo: to });
+    return;
+  }
+  if (action === "reset-report-range") {
+    setState({ reportDateFrom: isoDateDaysAgo(365), reportDateTo: new Date().toISOString().slice(0, 10) });
+    return;
+  }
   if (action === "capture-snapshot") {
     try {
       await captureValuationSnapshot();
@@ -1678,6 +1932,14 @@ rootEl.addEventListener("input", (event) => {
   }
   if (target.id === "import-text") {
     state = { ...state, importText: target.value };
+    return;
+  }
+  if (target.name === "reportDateFrom" || target.name === "reportDateTo") {
+    if (target.name === "reportDateFrom") {
+      state = { ...state, reportDateFrom: target.value };
+    } else {
+      state = { ...state, reportDateTo: target.value };
+    }
   }
 });
 
