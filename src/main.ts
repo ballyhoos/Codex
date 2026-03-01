@@ -20,7 +20,8 @@ import type {
   AppState,
   CategoryNode,
   ColumnDef,
-  ExportBundleV1,
+  ExportBundle,
+  ExportBundleV2,
   FilterClause,
   InventoryRecord,
   ValuationSnapshot,
@@ -1296,7 +1297,7 @@ function render() {
               <button type="button" class="btn btn-warning btn-sm" data-action="replace-import">Replace all from JSON</button>
             </div>
             <label class="form-label">Import JSON (replace all)
-              <textarea class="form-control" id="import-text" rows="10" placeholder='Paste ExportBundleV1 JSON here'>${escapeHtml(state.importText)}</textarea>
+              <textarea class="form-control" id="import-text" rows="10" placeholder='Paste ExportBundleV1/V2 JSON here'>${escapeHtml(state.importText)}</textarea>
             </label>
           </div>
         </div>
@@ -1322,13 +1323,14 @@ function render() {
   initDataTables();
 }
 
-function buildExportBundle(): ExportBundleV1 {
+function buildExportBundle(): ExportBundleV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: nowIso(),
     settings: state.settings,
     categories: state.categories,
     purchases: state.inventoryRecords,
+    valuationSnapshots: state.valuationSnapshots,
   };
 }
 
@@ -1604,21 +1606,45 @@ function normalizeImportedInventoryRecord(raw: any): InventoryRecord {
   };
 }
 
+function normalizeImportedValuationSnapshot(raw: any): ValuationSnapshot {
+  const now = nowIso();
+  const scope = raw.scope === "portfolio" || raw.scope === "market" ? raw.scope : "market";
+  const source = raw.source === "derived" ? "derived" : "manual";
+  const evaluationMode = raw.evaluationMode === "spot" || raw.evaluationMode === "snapshot" ? raw.evaluationMode : undefined;
+  const valueCents = Number(raw.valueCents);
+  if (!Number.isFinite(valueCents)) {
+    throw new Error(`Invalid valuation snapshot valueCents for ${raw.id ?? "(unknown id)"}`);
+  }
+  return {
+    id: String(raw.id ?? crypto.randomUUID()),
+    capturedAt: raw.capturedAt ? String(raw.capturedAt) : now,
+    scope,
+    marketId: scope === "market" ? String(raw.marketId ?? "") || undefined : undefined,
+    evaluationMode,
+    valueCents,
+    quantity: raw.quantity == null || raw.quantity === "" ? undefined : Number(raw.quantity),
+    source,
+    note: raw.note ? String(raw.note) : undefined,
+    createdAt: raw.createdAt ? String(raw.createdAt) : now,
+    updatedAt: raw.updatedAt ? String(raw.updatedAt) : now,
+  };
+}
+
 async function handleReplaceImport() {
   const rawText = state.importText.trim();
   if (!rawText) {
     alert("Paste JSON or choose a JSON file first.");
     return;
   }
-  let parsed: any;
+  let parsed: ExportBundle | any;
   try {
     parsed = JSON.parse(rawText);
   } catch {
     alert("Import JSON is not valid.");
     return;
   }
-  if (parsed?.schemaVersion !== 1) {
-    alert("Unsupported schemaVersion. Expected 1.");
+  if (parsed?.schemaVersion !== 1 && parsed?.schemaVersion !== 2) {
+    alert("Unsupported schemaVersion. Expected 1 or 2.");
     return;
   }
   if (!Array.isArray(parsed.categories) || !Array.isArray(parsed.purchases)) {
@@ -1641,10 +1667,14 @@ async function handleReplaceImport() {
         { key: "currencyCode", value: DEFAULT_CURRENCY },
         { key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL },
       ];
+    const valuationSnapshots: ValuationSnapshot[] =
+      parsed.schemaVersion === 2 && Array.isArray(parsed.valuationSnapshots)
+        ? parsed.valuationSnapshots.map(normalizeImportedValuationSnapshot)
+        : [];
 
     const confirmed = window.confirm("Replace all existing data with imported data? This cannot be undone.");
     if (!confirmed) return;
-    await replaceAllData({ purchases: importedInventoryRecords, categories, settings });
+    await replaceAllData({ purchases: importedInventoryRecords, categories, settings, valuationSnapshots });
     setState({ importText: "" });
     await reloadData();
   } catch (err) {
