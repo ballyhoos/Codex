@@ -6,8 +6,10 @@ import {
   listCategories,
   listInventoryRecords,
   listSettings,
+  listValuationSnapshots,
   putCategory,
   putInventoryRecord,
+  putValuationSnapshots,
   putSetting,
   replaceAllData,
 } from "./db";
@@ -18,9 +20,11 @@ import type {
   AppState,
   CategoryNode,
   ColumnDef,
-  ExportBundleV1,
+  ExportBundle,
+  ExportBundleV2,
   FilterClause,
   InventoryRecord,
+  ValuationSnapshot,
   ViewId,
 } from "./types";
 
@@ -51,11 +55,16 @@ let dataTablesRetryTimer: number | null = null;
 let pendingAddFilterTimer: number | null = null;
 let hoveredFilterSectionViewId: ViewId | null = null;
 let dataToolsOpen = false;
+let toastTimer: number | null = null;
+let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
 
 let state: AppState = {
   inventoryRecords: [],
   categories: [],
   settings: [],
+  valuationSnapshots: [],
+  reportDateFrom: isoDateDaysAgo(365),
+  reportDateTo: new Date().toISOString().slice(0, 10),
   filters: [],
   showArchivedInventory: false,
   showArchivedCategories: false,
@@ -83,6 +92,12 @@ const CURRENCY_SYMBOL_OPTIONS = [
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isoDateDaysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
 }
 
 function escapeHtml(value: unknown): string {
@@ -131,6 +146,21 @@ function getSettingValue<T = unknown>(key: string): T | undefined {
 function setState(next: Partial<AppState>) {
   state = { ...state, ...next };
   render();
+}
+
+function setToast(toast: { tone: "success" | "warning" | "danger"; text: string } | null) {
+  if (toastTimer != null) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  toastState = toast;
+  render();
+  if (!toast) return;
+  toastTimer = window.setTimeout(() => {
+    toastTimer = null;
+    toastState = null;
+    render();
+  }, 3500);
 }
 
 function openModal(next: ModalState) {
@@ -282,7 +312,12 @@ function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInst
 
 
 async function reloadData() {
-  const [inventoryRecords, categories, settings] = await Promise.all([listInventoryRecords(), listCategories(), listSettings()]);
+  const [inventoryRecords, categories, settings, valuationSnapshots] = await Promise.all([
+    listInventoryRecords(),
+    listCategories(),
+    listSettings(),
+    listValuationSnapshots(),
+  ]);
   const normalizedCategories = recomputeCategoryPaths(categories).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   if (!settings.some((s) => s.key === "currencyCode")) {
     await putSetting("currencyCode", DEFAULT_CURRENCY);
@@ -302,7 +337,7 @@ async function reloadData() {
     storageUsageBytes = null;
     storageQuotaBytes = null;
   }
-  state = { ...state, inventoryRecords, categories: normalizedCategories, settings, storageUsageBytes, storageQuotaBytes };
+  state = { ...state, inventoryRecords, categories: normalizedCategories, settings, valuationSnapshots, storageUsageBytes, storageQuotaBytes };
   render();
 }
 
@@ -361,6 +396,24 @@ function syncInventoryFormUnitPrice(form: HTMLFormElement) {
   unitEl.value = (Math.round(totalPriceCents / quantity) / 100).toFixed(2);
 }
 
+function syncInventoryFormFieldsByMarket(form: HTMLFormElement) {
+  const categoryEl = form.querySelector<HTMLSelectElement>('select[name="categoryId"]');
+  const qtyGroupEl = form.querySelector<HTMLElement>("[data-quantity-group]");
+  const qtyEl = form.querySelector<HTMLInputElement>('input[name="quantity"]');
+  if (!categoryEl || !qtyGroupEl || !qtyEl) return;
+  const selectedCategory = getCategoryById(categoryEl.value);
+  const isSnapshot = selectedCategory?.evaluationMode === "snapshot";
+  qtyGroupEl.hidden = isSnapshot;
+  if (isSnapshot) {
+    if (!Number.isFinite(Number(qtyEl.value)) || Number(qtyEl.value) <= 0) {
+      qtyEl.value = "1";
+    }
+    qtyEl.readOnly = true;
+  } else {
+    qtyEl.readOnly = false;
+  }
+}
+
 function syncCategoryEvaluationFields(form: HTMLFormElement) {
   const evaluationEl = form.querySelector<HTMLSelectElement>('select[name="evaluationMode"]');
   const spotGroupEl = form.querySelector<HTMLElement>("[data-spot-value-group]");
@@ -387,6 +440,22 @@ function getColumnAlignClass<Row>(col: ColumnDef<Row>): string {
 
 function isInventoryRecordCountableForCategoryMetrics(record: InventoryRecord): boolean {
   return record.active && !record.archived;
+}
+
+function buildCategoryMetricMaps() {
+  const persistentInventoryForCategoryMetrics = state.inventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
+  const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
+  const categoryTotals = computeCategoryTotals(persistentInventoryForCategoryMetrics, visibleCategoriesForTotals);
+  const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
+  const categoryQty = new Map<string, number>();
+  for (const p of persistentInventoryForCategoryMetrics) {
+    const purchaseCategory = categoriesById.get(p.categoryId);
+    if (!purchaseCategory) continue;
+    for (const categoryId of purchaseCategory.pathIds) {
+      categoryQty.set(categoryId, (categoryQty.get(categoryId) || 0) + p.quantity);
+    }
+  }
+  return { categoryTotals, categoryQty };
 }
 
 function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
@@ -421,7 +490,6 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
     { key: "name", label: "Name", getValue: (r) => r.name, getDisplay: (r) => r.name, filterable: true, filterOp: "contains" },
     { key: "parent", label: "Parent", getValue: (r) => getParentCategoryName(r), getDisplay: (r) => getParentCategoryName(r), filterable: true, filterOp: "eq" },
     { key: "path", label: "Market", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
-    { key: "evaluationMode", label: "Evaluation", getValue: (r) => r.evaluationMode || "", getDisplay: (r) => formatCategoryEvaluationMode(r), filterable: true, filterOp: "eq" },
     {
       key: "spotValueCents",
       label: "Value",
@@ -456,21 +524,7 @@ function getDerived() {
     inventoryColumns,
     { categoryDescendantsMap },
   );
-  const persistentInventoryForCategoryMetrics = state.inventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
-
-  const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
-  const categoryTotals = computeCategoryTotals(persistentInventoryForCategoryMetrics, visibleCategoriesForTotals);
-  const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
-  const categoryItems = new Map<string, number>();
-  const categoryQty = new Map<string, number>();
-  for (const p of persistentInventoryForCategoryMetrics) {
-    const purchaseCategory = categoriesById.get(p.categoryId);
-    if (!purchaseCategory) continue;
-    for (const categoryId of purchaseCategory.pathIds) {
-      categoryItems.set(categoryId, (categoryItems.get(categoryId) || 0) + 1);
-      categoryQty.set(categoryId, (categoryQty.get(categoryId) || 0) + p.quantity);
-    }
-  }
+  const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
   const categoryColumns: ColumnDef<CategoryNode>[] = [
     ...leadingCategoryColumns,
     {
@@ -494,10 +548,15 @@ function getDerived() {
     {
       key: "computedTotalCents",
       label: "Total",
-      getValue: (r) => (r.evaluationMode === "spot" && r.spotValueCents != null ? (categoryQty.get(r.id) || 0) * r.spotValueCents : ""),
+      getValue: (r) => {
+        if (r.evaluationMode === "snapshot") return categoryTotals.get(r.id) || 0;
+        if (r.evaluationMode === "spot" && r.spotValueCents != null) return (categoryQty.get(r.id) || 0) * r.spotValueCents;
+        return "";
+      },
       getDisplay: (r) => {
-        if (r.evaluationMode !== "spot" || r.spotValueCents == null) return "";
-        return formatMoney((categoryQty.get(r.id) || 0) * r.spotValueCents);
+        if (r.evaluationMode === "snapshot") return formatMoney(categoryTotals.get(r.id) || 0);
+        if (r.evaluationMode === "spot" && r.spotValueCents != null) return formatMoney((categoryQty.get(r.id) || 0) * r.spotValueCents);
+        return "";
       },
       filterable: true,
       filterOp: "eq",
@@ -515,8 +574,70 @@ function getDerived() {
     filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
-    visibleCategoriesForTotals,
+    categoryQty,
   };
+}
+
+async function captureValuationSnapshot() {
+  const now = nowIso();
+  const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
+  const markets = state.categories.filter((c) => c.active && !c.isArchived);
+  const snapshots: ValuationSnapshot[] = [];
+  let totalPortfolioValue = 0;
+  let skipped = 0;
+
+  for (const market of markets) {
+    let valueCents: number | null = null;
+    const qty = categoryQty.get(market.id) || 0;
+    if (market.evaluationMode === "spot") {
+      if (market.spotValueCents == null) {
+        skipped += 1;
+        continue;
+      }
+      valueCents = Math.round(qty * market.spotValueCents);
+    } else if (market.evaluationMode === "snapshot") {
+      valueCents = categoryTotals.get(market.id) || 0;
+    } else {
+      skipped += 1;
+      continue;
+    }
+    totalPortfolioValue += valueCents;
+    snapshots.push({
+      id: crypto.randomUUID(),
+      capturedAt: now,
+      scope: "market",
+      marketId: market.id,
+      evaluationMode: market.evaluationMode,
+      valueCents,
+      quantity: market.evaluationMode === "spot" ? qty : undefined,
+      source: "manual",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  if (!snapshots.length) {
+    setToast({ tone: "warning", text: "No markets were eligible for snapshot capture." });
+    return;
+  }
+
+  snapshots.push({
+    id: crypto.randomUUID(),
+    capturedAt: now,
+    scope: "portfolio",
+    valueCents: totalPortfolioValue,
+    source: "manual",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await putValuationSnapshots(snapshots);
+  await reloadData();
+  const skippedText = skipped > 0 ? ` (${skipped} skipped)` : "";
+  setToast({
+    tone: "success",
+    text: `Snapshot captured ${new Date(now).toLocaleString()} • ${formatMoney(totalPortfolioValue)}${skippedText}`,
+  });
 }
 
 function renderFilterChips(viewId: ViewId, title: string) {
@@ -603,6 +724,171 @@ function renderTableFooter<Row>(columns: ColumnDef<Row>[], rows: Row[]): string 
   });
   cells.push(`<th class="actions-col" aria-hidden="true"></th>`);
   return `<tfoot><tr>${cells.join("")}</tr></tfoot>`;
+}
+
+type GrowthReportRow = {
+  marketId: string;
+  marketLabel: string;
+  startValueCents: number | null;
+  endValueCents: number | null;
+  contributionsCents: number;
+  netGrowthCents: number | null;
+  growthPct: number | null;
+};
+
+function parseYyyyMmDdToMs(value: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  return Date.parse(`${value}T00:00:00Z`);
+}
+
+function normalizeScopeMarketIds(selectedMarketIds: Set<string>, descendants: Map<string, Set<string>>): string[] {
+  const ids = [...selectedMarketIds];
+  const normalized = ids.filter((id) => {
+    for (const other of ids) {
+      if (other === id) continue;
+      const subtree = descendants.get(other);
+      if (subtree?.has(id)) return false;
+    }
+    return true;
+  });
+  return normalized;
+}
+
+function getReportScopeMarketIds(categoryDescendantsMap: Map<string, Set<string>>): string[] {
+  const parentCategoryFilterIds = new Set(
+    state.filters
+      .filter((f) => f.viewId === "categoriesList")
+      .map((f) => f.id),
+  );
+  const linkedMarketIds = new Set(
+    state.filters
+      .filter(
+        (f) =>
+          f.viewId === "inventoryTable" &&
+          f.field === "categoryId" &&
+          f.op === "inCategorySubtree" &&
+          !!f.linkedToFilterId &&
+          parentCategoryFilterIds.has(f.linkedToFilterId),
+      )
+      .map((f) => f.value),
+  );
+  if (linkedMarketIds.size > 0) {
+    return normalizeScopeMarketIds(linkedMarketIds, categoryDescendantsMap);
+  }
+  return state.categories
+    .filter((c) => !c.isArchived && c.active && c.parentId == null)
+    .map((c) => c.id);
+}
+
+function pickBoundarySnapshotValueCents(capturedAtAsc: ValuationSnapshot[], boundaryMs: number): number | null {
+  if (!capturedAtAsc.length) return null;
+  let latestBeforeOrAt: ValuationSnapshot | null = null;
+  for (const snap of capturedAtAsc) {
+    const snapMs = Date.parse(snap.capturedAt);
+    if (!Number.isFinite(snapMs)) continue;
+    if (snapMs <= boundaryMs) {
+      latestBeforeOrAt = snap;
+      continue;
+    }
+    return latestBeforeOrAt ? latestBeforeOrAt.valueCents : snap.valueCents;
+  }
+  return latestBeforeOrAt ? latestBeforeOrAt.valueCents : null;
+}
+
+function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>): {
+  scopeMarketIds: string[];
+  rows: GrowthReportRow[];
+  startTotalCents: number;
+  endTotalCents: number;
+  contributionsTotalCents: number;
+  netGrowthTotalCents: number;
+} {
+  const fromMs = parseYyyyMmDdToMs(state.reportDateFrom);
+  const toMs = parseYyyyMmDdToMs(state.reportDateTo);
+  if (fromMs == null || toMs == null || fromMs > toMs) {
+    return {
+      scopeMarketIds: [],
+      rows: [],
+      startTotalCents: 0,
+      endTotalCents: 0,
+      contributionsTotalCents: 0,
+      netGrowthTotalCents: 0,
+    };
+  }
+
+  const scopeMarketIds = getReportScopeMarketIds(categoryDescendantsMap);
+  const marketSnapshotsById = new Map<string, ValuationSnapshot[]>();
+  for (const snap of state.valuationSnapshots) {
+    if (snap.scope !== "market" || !snap.marketId) continue;
+    const arr = marketSnapshotsById.get(snap.marketId) || [];
+    arr.push(snap);
+    marketSnapshotsById.set(snap.marketId, arr);
+  }
+  for (const arr of marketSnapshotsById.values()) {
+    arr.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
+  }
+
+  const activeNonArchivedInventory = state.inventoryRecords.filter((r) => r.active && !r.archived);
+  const rows: GrowthReportRow[] = [];
+  let startTotalCents = 0;
+  let endTotalCents = 0;
+  let contributionsTotalCents = 0;
+  let netGrowthTotalCents = 0;
+
+  for (const marketId of scopeMarketIds) {
+    const market = getCategoryById(marketId);
+    if (!market) continue;
+    const subtree = categoryDescendantsMap.get(marketId) || new Set([marketId]);
+    const snaps = marketSnapshotsById.get(marketId) || [];
+    const startValueCents = pickBoundarySnapshotValueCents(snaps, fromMs);
+    const endValueCents = pickBoundarySnapshotValueCents(snaps, toMs);
+    let contributionsCents = 0;
+    for (const rec of activeNonArchivedInventory) {
+      if (!subtree.has(rec.categoryId)) continue;
+      const purchaseMs = parseYyyyMmDdToMs(rec.purchaseDate);
+      if (purchaseMs == null) continue;
+      if (purchaseMs > fromMs && purchaseMs <= toMs) {
+        contributionsCents += rec.totalPriceCents;
+      }
+    }
+    const netGrowthCents =
+      startValueCents == null || endValueCents == null
+        ? null
+        : endValueCents - startValueCents - contributionsCents;
+    const growthPct =
+      netGrowthCents == null || startValueCents == null || startValueCents <= 0
+        ? null
+        : netGrowthCents / startValueCents;
+
+    if (startValueCents != null) startTotalCents += startValueCents;
+    if (endValueCents != null) endTotalCents += endValueCents;
+    contributionsTotalCents += contributionsCents;
+    if (netGrowthCents != null) netGrowthTotalCents += netGrowthCents;
+
+    rows.push({
+      marketId,
+      marketLabel: market.pathNames.join(" / "),
+      startValueCents,
+      endValueCents,
+      contributionsCents,
+      netGrowthCents,
+      growthPct,
+    });
+  }
+
+  return {
+    scopeMarketIds,
+    rows,
+    startTotalCents,
+    endTotalCents,
+    contributionsTotalCents,
+    netGrowthTotalCents,
+  };
+}
+
+function formatPercent(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(2)}%`;
 }
 
 function renderModal(): string {
@@ -720,8 +1006,14 @@ function renderModal(): string {
             <input type="hidden" name="mode" value="create" />
             <input type="hidden" name="inventoryId" value="" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
+            <label>Market
+              <select class="form-select" name="categoryId" required>
+                <option value="">Select market</option>
+                ${categoryOptions()}
+              </select>
+            </label>
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="" /></label>
-            <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="" /></label>
+            <label class="form-label mb-0" data-quantity-group>Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="" /></label>
             <label class="form-label mb-0">Total price
               <div class="input-group">
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
@@ -733,12 +1025,6 @@ function renderModal(): string {
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled />
               </div>
-            </label>
-            <label>Market
-              <select class="form-select" name="categoryId" required>
-                <option value="">Select market</option>
-                ${categoryOptions()}
-              </select>
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" checked /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3"></textarea></label>
@@ -769,8 +1055,14 @@ function renderModal(): string {
             <input type="hidden" name="mode" value="edit" />
             <input type="hidden" name="inventoryId" value="${escapeHtml(purchase.id)}" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${escapeHtml(purchase.purchaseDate)}" /></label>
+            <label>Market
+              <select class="form-select" name="categoryId" required>
+                <option value="">Select market</option>
+                ${categoryOptions(undefined, purchase.categoryId)}
+              </select>
+            </label>
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="${escapeHtml(purchase.productName)}" /></label>
-            <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="${escapeHtml(String(purchase.quantity))}" /></label>
+            <label class="form-label mb-0" data-quantity-group>Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="${escapeHtml(String(purchase.quantity))}" /></label>
             <label class="form-label mb-0">Total price
               <div class="input-group">
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
@@ -782,12 +1074,6 @@ function renderModal(): string {
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" disabled />
               </div>
-            </label>
-            <label>Market
-              <select class="form-select" name="categoryId" required>
-                <option value="">Select market</option>
-                ${categoryOptions(undefined, purchase.categoryId)}
-              </select>
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${purchase.active ? "checked" : ""} /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3">${escapeHtml(purchase.notes || "")}</textarea></label>
@@ -816,11 +1102,13 @@ function render() {
   const {
     inventoryColumns,
     categoryColumns,
+    categoryDescendantsMap,
     filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
-    visibleCategoriesForTotals,
   } = getDerived();
+  const report = buildGrowthReportRows(categoryDescendantsMap);
+  const reportGrowthPct = report.startTotalCents > 0 ? report.netGrowthTotalCents / report.startTotalCents : null;
 
   const exportText = state.exportText || buildExportJsonText();
   const inventoryRowsHtml = filteredInventoryRecords
@@ -860,8 +1148,12 @@ function render() {
             <h1 class="display-6 mb-1">Investments</h1>
             <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
           </div>
-          <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
+          <div class="d-flex align-items-center gap-2">
+            <button type="button" class="header-indicator-btn btn btn-outline-success btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
+            <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
+          </div>
         </div>
+        ${toastState ? `<div class="alert alert-${toastState.tone} py-1 px-2 mt-2 mb-0 small" role="status">${escapeHtml(toastState.text)}</div>` : ""}
       </header>
 
       <section class="card shadow-sm" data-filter-section-view-id="categoriesList">
@@ -918,6 +1210,65 @@ function render() {
         </div>
       </section>
 
+      <section class="card shadow-sm">
+        <div class="card-body">
+          <div class="section-head">
+            <h2 class="h5 mb-0">Growth Report</h2>
+            <span class="small text-body-secondary">
+              Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
+            </span>
+          </div>
+          <div class="d-flex align-items-end gap-2 flex-wrap my-2">
+            <label class="form-label mb-0">From
+              <input class="form-control form-control-sm" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
+            </label>
+            <label class="form-label mb-0">To
+              <input class="form-control form-control-sm" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
+            </label>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
+          </div>
+          ${report.rows.length === 0 ? `
+            <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
+          ` : `
+            <div class="small mb-2">
+              <strong>Portfolio:</strong>
+              Start ${formatMoney(report.startTotalCents)}
+              • End ${formatMoney(report.endTotalCents)}
+              • Contributions ${formatMoney(report.contributionsTotalCents)}
+              • Net Growth ${formatMoney(report.netGrowthTotalCents)}
+              • ${formatPercent(reportGrowthPct)}
+            </div>
+            <div class="table-wrap table-responsive">
+              <table class="table table-striped table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Market</th>
+                    <th class="text-end">Start</th>
+                    <th class="text-end">End</th>
+                    <th class="text-end">Contributions</th>
+                    <th class="text-end">Net Growth</th>
+                    <th class="text-end">Growth %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${report.rows.map((row) => `
+                    <tr>
+                      <td>${escapeHtml(row.marketLabel)}</td>
+                      <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
+                      <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
+                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
+                      <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
+                      <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      </section>
+
       <details class="card shadow-sm details-card" ${dataToolsOpen ? "open" : ""}>
         <summary class="card-header">Data Tools</summary>
         <div class="details-content card-body">
@@ -946,7 +1297,7 @@ function render() {
               <button type="button" class="btn btn-warning btn-sm" data-action="replace-import">Replace all from JSON</button>
             </div>
             <label class="form-label">Import JSON (replace all)
-              <textarea class="form-control" id="import-text" rows="10" placeholder='Paste ExportBundleV1 JSON here'>${escapeHtml(state.importText)}</textarea>
+              <textarea class="form-control" id="import-text" rows="10" placeholder='Paste ExportBundleV1/V2 JSON here'>${escapeHtml(state.importText)}</textarea>
             </label>
           </div>
         </div>
@@ -962,20 +1313,24 @@ function render() {
     ${renderModal()}
   `;
   const purchaseForm = rootEl.querySelector<HTMLFormElement>('#inventory-form');
-  if (purchaseForm) syncInventoryFormUnitPrice(purchaseForm);
+  if (purchaseForm) {
+    syncInventoryFormFieldsByMarket(purchaseForm);
+    syncInventoryFormUnitPrice(purchaseForm);
+  }
   const categoryForm = rootEl.querySelector<HTMLFormElement>("#category-form");
   if (categoryForm) syncCategoryEvaluationFields(categoryForm);
   syncModalFocus();
   initDataTables();
 }
 
-function buildExportBundle(): ExportBundleV1 {
+function buildExportBundle(): ExportBundleV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: nowIso(),
     settings: state.settings,
     categories: state.categories,
     purchases: state.inventoryRecords,
+    valuationSnapshots: state.valuationSnapshots,
   };
 }
 
@@ -1251,21 +1606,45 @@ function normalizeImportedInventoryRecord(raw: any): InventoryRecord {
   };
 }
 
+function normalizeImportedValuationSnapshot(raw: any): ValuationSnapshot {
+  const now = nowIso();
+  const scope = raw.scope === "portfolio" || raw.scope === "market" ? raw.scope : "market";
+  const source = raw.source === "derived" ? "derived" : "manual";
+  const evaluationMode = raw.evaluationMode === "spot" || raw.evaluationMode === "snapshot" ? raw.evaluationMode : undefined;
+  const valueCents = Number(raw.valueCents);
+  if (!Number.isFinite(valueCents)) {
+    throw new Error(`Invalid valuation snapshot valueCents for ${raw.id ?? "(unknown id)"}`);
+  }
+  return {
+    id: String(raw.id ?? crypto.randomUUID()),
+    capturedAt: raw.capturedAt ? String(raw.capturedAt) : now,
+    scope,
+    marketId: scope === "market" ? String(raw.marketId ?? "") || undefined : undefined,
+    evaluationMode,
+    valueCents,
+    quantity: raw.quantity == null || raw.quantity === "" ? undefined : Number(raw.quantity),
+    source,
+    note: raw.note ? String(raw.note) : undefined,
+    createdAt: raw.createdAt ? String(raw.createdAt) : now,
+    updatedAt: raw.updatedAt ? String(raw.updatedAt) : now,
+  };
+}
+
 async function handleReplaceImport() {
   const rawText = state.importText.trim();
   if (!rawText) {
     alert("Paste JSON or choose a JSON file first.");
     return;
   }
-  let parsed: any;
+  let parsed: ExportBundle | any;
   try {
     parsed = JSON.parse(rawText);
   } catch {
     alert("Import JSON is not valid.");
     return;
   }
-  if (parsed?.schemaVersion !== 1) {
-    alert("Unsupported schemaVersion. Expected 1.");
+  if (parsed?.schemaVersion !== 1 && parsed?.schemaVersion !== 2) {
+    alert("Unsupported schemaVersion. Expected 1 or 2.");
     return;
   }
   if (!Array.isArray(parsed.categories) || !Array.isArray(parsed.purchases)) {
@@ -1288,10 +1667,14 @@ async function handleReplaceImport() {
         { key: "currencyCode", value: DEFAULT_CURRENCY },
         { key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL },
       ];
+    const valuationSnapshots: ValuationSnapshot[] =
+      parsed.schemaVersion === 2 && Array.isArray(parsed.valuationSnapshots)
+        ? parsed.valuationSnapshots.map(normalizeImportedValuationSnapshot)
+        : [];
 
     const confirmed = window.confirm("Replace all existing data with imported data? This cannot be undone.");
     if (!confirmed) return;
-    await replaceAllData({ purchases: importedInventoryRecords, categories, settings });
+    await replaceAllData({ purchases: importedInventoryRecords, categories, settings, valuationSnapshots });
     setState({ importText: "" });
     await reloadData();
   } catch (err) {
@@ -1444,6 +1827,33 @@ rootEl.addEventListener("click", async (event) => {
     openModal({ kind: "settings" });
     return;
   }
+  if (action === "apply-report-range") {
+    const fromInput = rootEl.querySelector<HTMLInputElement>('input[name="reportDateFrom"]');
+    const toInput = rootEl.querySelector<HTMLInputElement>('input[name="reportDateTo"]');
+    if (!fromInput || !toInput) return;
+    const from = fromInput.value;
+    const to = toInput.value;
+    const fromMs = parseYyyyMmDdToMs(from);
+    const toMs = parseYyyyMmDdToMs(to);
+    if (fromMs == null || toMs == null || fromMs > toMs) {
+      setToast({ tone: "warning", text: "Select a valid report date range." });
+      return;
+    }
+    setState({ reportDateFrom: from, reportDateTo: to });
+    return;
+  }
+  if (action === "reset-report-range") {
+    setState({ reportDateFrom: isoDateDaysAgo(365), reportDateTo: new Date().toISOString().slice(0, 10) });
+    return;
+  }
+  if (action === "capture-snapshot") {
+    try {
+      await captureValuationSnapshot();
+    } catch {
+      setToast({ tone: "danger", text: "Failed to capture snapshot." });
+    }
+    return;
+  }
   if (action === "edit-category") {
     const id = actionEl.dataset.id;
     if (id) openModal({ kind: "categoryEdit", categoryId: id });
@@ -1552,11 +1962,27 @@ rootEl.addEventListener("input", (event) => {
   }
   if (target.id === "import-text") {
     state = { ...state, importText: target.value };
+    return;
+  }
+  if (target.name === "reportDateFrom" || target.name === "reportDateTo") {
+    if (target.name === "reportDateFrom") {
+      state = { ...state, reportDateFrom: target.value };
+    } else {
+      state = { ...state, reportDateTo: target.value };
+    }
   }
 });
 
 rootEl.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target instanceof HTMLSelectElement && target.name === "categoryId") {
+    const form = target.closest("form");
+    if (form instanceof HTMLFormElement && form.id === "inventory-form") {
+      syncInventoryFormFieldsByMarket(form);
+      syncInventoryFormUnitPrice(form);
+    }
+    return;
+  }
   if (target instanceof HTMLSelectElement && target.name === "evaluationMode") {
     const form = target.closest("form");
     if (form instanceof HTMLFormElement && form.id === "category-form") {

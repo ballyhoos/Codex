@@ -61,13 +61,15 @@ This repository contains a **local-only front-end SPA** for tracking purchases o
 Database name: `investment_purchase_tracker`
 
 Stores:
-- `purchases`
+- `inventory`
 - `categories`
 - `settings`
+- `valuationSnapshots`
 
 Important indexes:
-- purchases: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
+- inventory: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
 - categories: `by_parentId`, `by_name`, `by_isArchived`
+- valuationSnapshots: `by_capturedAt`, `by_scope`, `by_marketId`, `by_marketId_capturedAt`
 
 ### Key files (current implementation)
 
@@ -113,6 +115,10 @@ Important indexes:
   - Clicking a crumb removes that filter.
   - `Clear Filter` button sits inline and right-aligned on the same row.
 - If changing visible table columns or ordering, keep the DataTables Actions column non-sortable and preserve current filterability expectations for visible data columns.
+- Growth reporting (current prototype direction):
+  - report scope follows active `categoriesList` (Markets table) filter context
+  - parent market selections are subtree-inclusive
+  - reporting uses valuation snapshots + contribution math from active/non-archived inventory records
 
 ## Skills
 A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.

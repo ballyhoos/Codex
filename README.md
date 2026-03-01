@@ -23,7 +23,9 @@ The app allows users to:
 - View purchases and categories in table/list views
 - Click any displayed data value to add a filter chip (view-scoped filtering)
 - See category totals that reflect the current purchase-table filters
-- Export/import JSON and export CSV
+- Capture valuation snapshots from the header
+- View market-scoped growth reporting over a selected period
+- Export/import JSON (schema V1/V2 compatibility)
 - Wipe all local IndexedDB data (explicit destructive action)
 
 ## Core Business Rules (Important)
@@ -91,20 +93,36 @@ Category totals:
 
 - key/value records (currently includes app-wide `currencyCode`, default `USD`)
 
+### `ValuationSnapshot`
+
+- `id`
+- `capturedAt`
+- `scope` (`portfolio` | `market`)
+- `marketId?`
+- `evaluationMode?` (`spot` | `snapshot`)
+- `valueCents`
+- `quantity?`
+- `source` (`manual` | `derived`)
+- `note?`
+- `createdAt`
+- `updatedAt`
+
 ## IndexedDB Schema
 
 Database name: `investment_purchase_tracker`
 
 Object stores:
 
-- `purchases`
+- `inventory`
 - `categories`
 - `settings`
+- `valuationSnapshots`
 
 Indexes:
 
-- `purchases`: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
+- `inventory`: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
 - `categories`: `by_parentId`, `by_name`, `by_isArchived`
+- `valuationSnapshots`: `by_capturedAt`, `by_scope`, `by_marketId`, `by_marketId_capturedAt`
 
 ## Project Structure (Current)
 
