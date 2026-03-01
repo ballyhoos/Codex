@@ -30,7 +30,7 @@ interface TrackerDB extends DBSchema {
   };
 }
 
-export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 2, {
+export const dbPromise = openDB<TrackerDB>("investment_purchase_tracker", 3, {
   async upgrade(db, _oldVersion, _newVersion, tx) {
     const legacyTx = tx as any;
     const legacyPurchasesStore = (db.objectStoreNames as any).contains("purchases")
