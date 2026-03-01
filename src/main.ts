@@ -9,6 +9,7 @@ import {
   listValuationSnapshots,
   putCategory,
   putInventoryRecord,
+  putValuationSnapshots,
   putSetting,
   replaceAllData,
 } from "./db";
@@ -22,6 +23,7 @@ import type {
   ExportBundleV1,
   FilterClause,
   InventoryRecord,
+  ValuationSnapshot,
   ViewId,
 } from "./types";
 
@@ -52,6 +54,8 @@ let dataTablesRetryTimer: number | null = null;
 let pendingAddFilterTimer: number | null = null;
 let hoveredFilterSectionViewId: ViewId | null = null;
 let dataToolsOpen = false;
+let toastTimer: number | null = null;
+let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
 
 let state: AppState = {
   inventoryRecords: [],
@@ -133,6 +137,21 @@ function getSettingValue<T = unknown>(key: string): T | undefined {
 function setState(next: Partial<AppState>) {
   state = { ...state, ...next };
   render();
+}
+
+function setToast(toast: { tone: "success" | "warning" | "danger"; text: string } | null) {
+  if (toastTimer != null) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  toastState = toast;
+  render();
+  if (!toast) return;
+  toastTimer = window.setTimeout(() => {
+    toastTimer = null;
+    toastState = null;
+    render();
+  }, 3500);
 }
 
 function openModal(next: ModalState) {
@@ -414,6 +433,22 @@ function isInventoryRecordCountableForCategoryMetrics(record: InventoryRecord): 
   return record.active && !record.archived;
 }
 
+function buildCategoryMetricMaps() {
+  const persistentInventoryForCategoryMetrics = state.inventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
+  const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
+  const categoryTotals = computeCategoryTotals(persistentInventoryForCategoryMetrics, visibleCategoriesForTotals);
+  const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
+  const categoryQty = new Map<string, number>();
+  for (const p of persistentInventoryForCategoryMetrics) {
+    const purchaseCategory = categoriesById.get(p.categoryId);
+    if (!purchaseCategory) continue;
+    for (const categoryId of purchaseCategory.pathIds) {
+      categoryQty.set(categoryId, (categoryQty.get(categoryId) || 0) + p.quantity);
+    }
+  }
+  return { categoryTotals, categoryQty };
+}
+
 function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
   return [
     { key: "productName", label: "Name", getValue: (r) => r.productName, getDisplay: (r) => r.productName, filterable: true, filterOp: "contains" },
@@ -480,21 +515,7 @@ function getDerived() {
     inventoryColumns,
     { categoryDescendantsMap },
   );
-  const persistentInventoryForCategoryMetrics = state.inventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
-
-  const visibleCategoriesForTotals = state.categories.filter((c) => !c.isArchived);
-  const categoryTotals = computeCategoryTotals(persistentInventoryForCategoryMetrics, visibleCategoriesForTotals);
-  const categoriesById = new Map(state.categories.map((c) => [c.id, c] as const));
-  const categoryItems = new Map<string, number>();
-  const categoryQty = new Map<string, number>();
-  for (const p of persistentInventoryForCategoryMetrics) {
-    const purchaseCategory = categoriesById.get(p.categoryId);
-    if (!purchaseCategory) continue;
-    for (const categoryId of purchaseCategory.pathIds) {
-      categoryItems.set(categoryId, (categoryItems.get(categoryId) || 0) + 1);
-      categoryQty.set(categoryId, (categoryQty.get(categoryId) || 0) + p.quantity);
-    }
-  }
+  const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
   const categoryColumns: ColumnDef<CategoryNode>[] = [
     ...leadingCategoryColumns,
     {
@@ -544,8 +565,70 @@ function getDerived() {
     filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
-    visibleCategoriesForTotals,
+    categoryQty,
   };
+}
+
+async function captureValuationSnapshot() {
+  const now = nowIso();
+  const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
+  const markets = state.categories.filter((c) => c.active && !c.isArchived);
+  const snapshots: ValuationSnapshot[] = [];
+  let totalPortfolioValue = 0;
+  let skipped = 0;
+
+  for (const market of markets) {
+    let valueCents: number | null = null;
+    const qty = categoryQty.get(market.id) || 0;
+    if (market.evaluationMode === "spot") {
+      if (market.spotValueCents == null) {
+        skipped += 1;
+        continue;
+      }
+      valueCents = Math.round(qty * market.spotValueCents);
+    } else if (market.evaluationMode === "snapshot") {
+      valueCents = categoryTotals.get(market.id) || 0;
+    } else {
+      skipped += 1;
+      continue;
+    }
+    totalPortfolioValue += valueCents;
+    snapshots.push({
+      id: crypto.randomUUID(),
+      capturedAt: now,
+      scope: "market",
+      marketId: market.id,
+      evaluationMode: market.evaluationMode,
+      valueCents,
+      quantity: market.evaluationMode === "spot" ? qty : undefined,
+      source: "manual",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  if (!snapshots.length) {
+    setToast({ tone: "warning", text: "No markets were eligible for snapshot capture." });
+    return;
+  }
+
+  snapshots.push({
+    id: crypto.randomUUID(),
+    capturedAt: now,
+    scope: "portfolio",
+    valueCents: totalPortfolioValue,
+    source: "manual",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await putValuationSnapshots(snapshots);
+  await reloadData();
+  const skippedText = skipped > 0 ? ` (${skipped} skipped)` : "";
+  setToast({
+    tone: "success",
+    text: `Snapshot captured ${new Date(now).toLocaleString()} • ${formatMoney(totalPortfolioValue)}${skippedText}`,
+  });
 }
 
 function renderFilterChips(viewId: ViewId, title: string) {
@@ -848,7 +931,6 @@ function render() {
     filteredInventoryRecords,
     filteredCategories,
     categoryTotals,
-    visibleCategoriesForTotals,
   } = getDerived();
 
   const exportText = state.exportText || buildExportJsonText();
@@ -889,8 +971,12 @@ function render() {
             <h1 class="display-6 mb-1">Investments</h1>
             <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
           </div>
-          <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
+          <div class="d-flex align-items-center gap-2">
+            <button type="button" class="header-indicator-btn btn btn-outline-success btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
+            <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
+          </div>
         </div>
+        ${toastState ? `<div class="alert alert-${toastState.tone} py-1 px-2 mt-2 mb-0 small" role="status">${escapeHtml(toastState.text)}</div>` : ""}
       </header>
 
       <section class="card shadow-sm" data-filter-section-view-id="categoriesList">
@@ -1474,6 +1560,14 @@ rootEl.addEventListener("click", async (event) => {
   }
   if (action === "open-settings") {
     openModal({ kind: "settings" });
+    return;
+  }
+  if (action === "capture-snapshot") {
+    try {
+      await captureValuationSnapshot();
+    } catch {
+      setToast({ tone: "danger", text: "Failed to capture snapshot." });
+    }
     return;
   }
   if (action === "edit-category") {
