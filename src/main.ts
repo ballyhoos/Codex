@@ -6,6 +6,7 @@ import {
   listCategories,
   listInventoryRecords,
   listSettings,
+  listValuationSnapshots,
   putCategory,
   putInventoryRecord,
   putSetting,
@@ -56,6 +57,7 @@ let state: AppState = {
   inventoryRecords: [],
   categories: [],
   settings: [],
+  valuationSnapshots: [],
   filters: [],
   showArchivedInventory: false,
   showArchivedCategories: false,
@@ -282,7 +284,12 @@ function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInst
 
 
 async function reloadData() {
-  const [inventoryRecords, categories, settings] = await Promise.all([listInventoryRecords(), listCategories(), listSettings()]);
+  const [inventoryRecords, categories, settings, valuationSnapshots] = await Promise.all([
+    listInventoryRecords(),
+    listCategories(),
+    listSettings(),
+    listValuationSnapshots(),
+  ]);
   const normalizedCategories = recomputeCategoryPaths(categories).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   if (!settings.some((s) => s.key === "currencyCode")) {
     await putSetting("currencyCode", DEFAULT_CURRENCY);
@@ -302,7 +309,7 @@ async function reloadData() {
     storageUsageBytes = null;
     storageQuotaBytes = null;
   }
-  state = { ...state, inventoryRecords, categories: normalizedCategories, settings, storageUsageBytes, storageQuotaBytes };
+  state = { ...state, inventoryRecords, categories: normalizedCategories, settings, valuationSnapshots, storageUsageBytes, storageQuotaBytes };
   render();
 }
 
@@ -359,6 +366,24 @@ function syncInventoryFormUnitPrice(form: HTMLFormElement) {
     return;
   }
   unitEl.value = (Math.round(totalPriceCents / quantity) / 100).toFixed(2);
+}
+
+function syncInventoryFormFieldsByMarket(form: HTMLFormElement) {
+  const categoryEl = form.querySelector<HTMLSelectElement>('select[name="categoryId"]');
+  const qtyGroupEl = form.querySelector<HTMLElement>("[data-quantity-group]");
+  const qtyEl = form.querySelector<HTMLInputElement>('input[name="quantity"]');
+  if (!categoryEl || !qtyGroupEl || !qtyEl) return;
+  const selectedCategory = getCategoryById(categoryEl.value);
+  const isSnapshot = selectedCategory?.evaluationMode === "snapshot";
+  qtyGroupEl.hidden = isSnapshot;
+  if (isSnapshot) {
+    if (!Number.isFinite(Number(qtyEl.value)) || Number(qtyEl.value) <= 0) {
+      qtyEl.value = "1";
+    }
+    qtyEl.readOnly = true;
+  } else {
+    qtyEl.readOnly = false;
+  }
 }
 
 function syncCategoryEvaluationFields(form: HTMLFormElement) {
@@ -421,7 +446,6 @@ function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
     { key: "name", label: "Name", getValue: (r) => r.name, getDisplay: (r) => r.name, filterable: true, filterOp: "contains" },
     { key: "parent", label: "Parent", getValue: (r) => getParentCategoryName(r), getDisplay: (r) => getParentCategoryName(r), filterable: true, filterOp: "eq" },
     { key: "path", label: "Market", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
-    { key: "evaluationMode", label: "Evaluation", getValue: (r) => r.evaluationMode || "", getDisplay: (r) => formatCategoryEvaluationMode(r), filterable: true, filterOp: "eq" },
     {
       key: "spotValueCents",
       label: "Value",
@@ -494,10 +518,15 @@ function getDerived() {
     {
       key: "computedTotalCents",
       label: "Total",
-      getValue: (r) => (r.evaluationMode === "spot" && r.spotValueCents != null ? (categoryQty.get(r.id) || 0) * r.spotValueCents : ""),
+      getValue: (r) => {
+        if (r.evaluationMode === "snapshot") return categoryTotals.get(r.id) || 0;
+        if (r.evaluationMode === "spot" && r.spotValueCents != null) return (categoryQty.get(r.id) || 0) * r.spotValueCents;
+        return "";
+      },
       getDisplay: (r) => {
-        if (r.evaluationMode !== "spot" || r.spotValueCents == null) return "";
-        return formatMoney((categoryQty.get(r.id) || 0) * r.spotValueCents);
+        if (r.evaluationMode === "snapshot") return formatMoney(categoryTotals.get(r.id) || 0);
+        if (r.evaluationMode === "spot" && r.spotValueCents != null) return formatMoney((categoryQty.get(r.id) || 0) * r.spotValueCents);
+        return "";
       },
       filterable: true,
       filterOp: "eq",
@@ -720,8 +749,14 @@ function renderModal(): string {
             <input type="hidden" name="mode" value="create" />
             <input type="hidden" name="inventoryId" value="" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
+            <label>Market
+              <select class="form-select" name="categoryId" required>
+                <option value="">Select market</option>
+                ${categoryOptions()}
+              </select>
+            </label>
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="" /></label>
-            <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="" /></label>
+            <label class="form-label mb-0" data-quantity-group>Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="" /></label>
             <label class="form-label mb-0">Total price
               <div class="input-group">
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
@@ -733,12 +768,6 @@ function renderModal(): string {
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled />
               </div>
-            </label>
-            <label>Market
-              <select class="form-select" name="categoryId" required>
-                <option value="">Select market</option>
-                ${categoryOptions()}
-              </select>
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" checked /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3"></textarea></label>
@@ -769,8 +798,14 @@ function renderModal(): string {
             <input type="hidden" name="mode" value="edit" />
             <input type="hidden" name="inventoryId" value="${escapeHtml(purchase.id)}" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${escapeHtml(purchase.purchaseDate)}" /></label>
+            <label>Market
+              <select class="form-select" name="categoryId" required>
+                <option value="">Select market</option>
+                ${categoryOptions(undefined, purchase.categoryId)}
+              </select>
+            </label>
             <label class="form-label mb-0">Product name<input class="form-control" name="productName" required value="${escapeHtml(purchase.productName)}" /></label>
-            <label class="form-label mb-0">Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="${escapeHtml(String(purchase.quantity))}" /></label>
+            <label class="form-label mb-0" data-quantity-group>Quantity<input class="form-control" type="number" step="any" min="0" name="quantity" required value="${escapeHtml(String(purchase.quantity))}" /></label>
             <label class="form-label mb-0">Total price
               <div class="input-group">
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
@@ -782,12 +817,6 @@ function renderModal(): string {
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="${escapeHtml(moneyInputFromCents(purchase.unitPriceCents))}" disabled />
               </div>
-            </label>
-            <label>Market
-              <select class="form-select" name="categoryId" required>
-                <option value="">Select market</option>
-                ${categoryOptions(undefined, purchase.categoryId)}
-              </select>
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${purchase.active ? "checked" : ""} /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3">${escapeHtml(purchase.notes || "")}</textarea></label>
@@ -962,7 +991,10 @@ function render() {
     ${renderModal()}
   `;
   const purchaseForm = rootEl.querySelector<HTMLFormElement>('#inventory-form');
-  if (purchaseForm) syncInventoryFormUnitPrice(purchaseForm);
+  if (purchaseForm) {
+    syncInventoryFormFieldsByMarket(purchaseForm);
+    syncInventoryFormUnitPrice(purchaseForm);
+  }
   const categoryForm = rootEl.querySelector<HTMLFormElement>("#category-form");
   if (categoryForm) syncCategoryEvaluationFields(categoryForm);
   syncModalFocus();
@@ -1557,6 +1589,14 @@ rootEl.addEventListener("input", (event) => {
 
 rootEl.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target instanceof HTMLSelectElement && target.name === "categoryId") {
+    const form = target.closest("form");
+    if (form instanceof HTMLFormElement && form.id === "inventory-form") {
+      syncInventoryFormFieldsByMarket(form);
+      syncInventoryFormUnitPrice(form);
+    }
+    return;
+  }
   if (target instanceof HTMLSelectElement && target.name === "evaluationMode") {
     const form = target.closest("form");
     if (form instanceof HTMLFormElement && form.id === "category-form") {
