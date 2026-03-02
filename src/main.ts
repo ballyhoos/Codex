@@ -78,6 +78,7 @@ let investmentsOpen = false;
 let expandedGrowthMarketIds = new Set<string>();
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
+let viewportResizeRenderTimer: number | null = null;
 
 let state: AppState = {
   inventoryRecords: [],
@@ -141,6 +142,12 @@ function formatBytes(bytes: number): string {
     unitIndex += 1;
   }
   return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function getViewportDebugText(): string {
+  const width = Math.round(window.innerWidth);
+  const mode = width <= 767 ? "Mobile (<=767px)" : "Desktop/Tablet (>767px)";
+  return `${mode} — ${width}px`;
 }
 
 function formatMoney(cents: number): string {
@@ -731,6 +738,43 @@ function buildCategoryMetricMaps() {
   return { categoryTotals, categoryQty };
 }
 
+function buildCategoryDisplayTotalsMap(categoryTotals: Map<string, number>, categoryQty: Map<string, number>) {
+  const childrenByParentId = new Map<string, CategoryNode[]>();
+  state.categories.forEach((category) => {
+    if (!category.parentId) return;
+    if (category.isArchived) return;
+    const siblings = childrenByParentId.get(category.parentId) || [];
+    siblings.push(category);
+    childrenByParentId.set(category.parentId, siblings);
+  });
+  const computedTotalByCategoryId = new Map<string, number>();
+  const computeCategoryDisplayTotal = (categoryId: string): number => {
+    const cached = computedTotalByCategoryId.get(categoryId);
+    if (cached != null) return cached;
+    const category = getCategoryById(categoryId);
+    if (!category || category.isArchived) {
+      computedTotalByCategoryId.set(categoryId, 0);
+      return 0;
+    }
+    let total = 0;
+    if (category.evaluationMode === "snapshot") {
+      total = categoryTotals.get(category.id) || 0;
+    } else if (category.evaluationMode === "spot" && category.spotValueCents != null) {
+      total = (categoryQty.get(category.id) || 0) * category.spotValueCents;
+    } else {
+      const children = childrenByParentId.get(category.id) || [];
+      total = children.reduce((sum, child) => sum + computeCategoryDisplayTotal(child.id), 0);
+    }
+    computedTotalByCategoryId.set(categoryId, total);
+    return total;
+  };
+  state.categories.forEach((category) => {
+    if (category.isArchived) return;
+    computeCategoryDisplayTotal(category.id);
+  });
+  return computedTotalByCategoryId;
+}
+
 function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
   return [
     { key: "productName", label: "Name", getValue: (r) => r.productName, getDisplay: (r) => r.productName, filterable: true, filterOp: "contains" },
@@ -797,6 +841,7 @@ function getDerived() {
     { categoryDescendantsMap },
   );
   const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
+  const computedTotalByCategoryId = buildCategoryDisplayTotalsMap(categoryTotals, categoryQty);
   const categoryColumns: ColumnDef<CategoryNode>[] = [
     ...leadingCategoryColumns,
     {
@@ -821,14 +866,10 @@ function getDerived() {
       key: "computedTotalCents",
       label: "Total",
       getValue: (r) => {
-        if (r.evaluationMode === "snapshot") return categoryTotals.get(r.id) || 0;
-        if (r.evaluationMode === "spot" && r.spotValueCents != null) return (categoryQty.get(r.id) || 0) * r.spotValueCents;
-        return "";
+        return computedTotalByCategoryId.get(r.id) || 0;
       },
       getDisplay: (r) => {
-        if (r.evaluationMode === "snapshot") return formatMoney(categoryTotals.get(r.id) || 0);
-        if (r.evaluationMode === "spot" && r.spotValueCents != null) return formatMoney((categoryQty.get(r.id) || 0) * r.spotValueCents);
-        return "";
+        return formatMoney(computedTotalByCategoryId.get(r.id) || 0);
       },
       filterable: true,
       filterOp: "eq",
@@ -853,6 +894,7 @@ function getDerived() {
 async function captureValuationSnapshot() {
   const now = nowIso();
   const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
+  const categoryDisplayTotals = buildCategoryDisplayTotalsMap(categoryTotals, categoryQty);
   const markets = state.categories.filter((c) => c.active && !c.isArchived);
   const snapshots: ValuationSnapshot[] = [];
   let totalPortfolioValue = 0;
@@ -870,8 +912,7 @@ async function captureValuationSnapshot() {
     } else if (market.evaluationMode === "snapshot") {
       valueCents = categoryTotals.get(market.id) || 0;
     } else {
-      skipped += 1;
-      continue;
+      valueCents = categoryDisplayTotals.get(market.id) || 0;
     }
     totalPortfolioValue += valueCents;
     snapshots.push({
@@ -1179,6 +1220,11 @@ function formatPercent(value: number | null): string {
   return `${(value * 100).toFixed(2)}%`;
 }
 
+function getGrowthToneClass(value: number | null): string {
+  if (value == null || !Number.isFinite(value) || value === 0) return "text-body-secondary";
+  return value > 0 ? "text-success" : "text-danger";
+}
+
 function renderModal(): string {
   if (modalState.kind === "none") return "";
   const currencySymbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
@@ -1396,6 +1442,8 @@ function renderModal(): string {
 }
 
 function render() {
+  const prevScrollX = window.scrollX;
+  const prevScrollY = window.scrollY;
   const existingDataTools = rootEl.querySelector<HTMLDetailsElement>('details[data-section="data-tools"]');
   if (existingDataTools) {
     dataToolsOpen = existingDataTools.open;
@@ -1494,6 +1542,7 @@ function render() {
           <div>
             <h1 class="display-6 mb-1">Investments</h1>
             <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
+            <p class="small text-body-secondary mb-0">Viewport debug: ${escapeHtml(getViewportDebugText())}</p>
           </div>
           <div class="d-flex align-items-center gap-2">
             <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
@@ -1551,11 +1600,11 @@ function render() {
                           }
                           ${escapeHtml(row.marketLabel)}
                         </td>
-                        <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
-                        <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
-                        <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
-                        <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
-                        <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
+                      <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
+                      <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
+                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
+                      <td class="text-end ${getGrowthToneClass(row.netGrowthCents)}">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
+                      <td class="text-end ${getGrowthToneClass(row.growthPct)}">${escapeHtml(formatPercent(row.growthPct))}</td>
                       </tr>
                       ${childRows
                         .map(
@@ -1565,8 +1614,8 @@ function render() {
                               <td class="text-end">${child.startValueCents == null ? "—" : escapeHtml(formatMoney(child.startValueCents))}</td>
                               <td class="text-end">${child.endValueCents == null ? "—" : escapeHtml(formatMoney(child.endValueCents))}</td>
                               <td class="text-end">${escapeHtml(formatMoney(child.contributionsCents))}</td>
-                              <td class="text-end">${child.netGrowthCents == null ? "—" : escapeHtml(formatMoney(child.netGrowthCents))}</td>
-                              <td class="text-end">${escapeHtml(formatPercent(child.growthPct))}</td>
+                              <td class="text-end ${getGrowthToneClass(child.netGrowthCents)}">${child.netGrowthCents == null ? "—" : escapeHtml(formatMoney(child.netGrowthCents))}</td>
+                              <td class="text-end ${getGrowthToneClass(child.growthPct)}">${escapeHtml(formatPercent(child.growthPct))}</td>
                             </tr>
                           `,
                         )
@@ -1580,8 +1629,8 @@ function render() {
                     <th class="text-end">${escapeHtml(formatMoney(report.startTotalCents))}</th>
                     <th class="text-end">${escapeHtml(formatMoney(report.endTotalCents))}</th>
                     <th class="text-end">${escapeHtml(formatMoney(report.contributionsTotalCents))}</th>
-                    <th class="text-end">${escapeHtml(formatMoney(report.netGrowthTotalCents))}</th>
-                    <th class="text-end">${escapeHtml(formatPercent(reportGrowthPct))}</th>
+                    <th class="text-end ${getGrowthToneClass(report.netGrowthTotalCents)}">${escapeHtml(formatMoney(report.netGrowthTotalCents))}</th>
+                    <th class="text-end ${getGrowthToneClass(reportGrowthPct)}">${escapeHtml(formatPercent(reportGrowthPct))}</th>
                   </tr>
                 </tfoot>
               </table>
@@ -1592,9 +1641,9 @@ function render() {
 
       <section class="card shadow-sm" data-filter-section-view-id="categoriesList">
         <div class="card-body">
-        <div class="section-head">
+        <div class="section-head markets-section-head">
           <h2 class="h5 mb-0">Markets</h2>
-          <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+          <div class="d-flex align-items-center gap-2 justify-content-end markets-section-actions">
             <button type="button" class="btn btn-warning capture-snapshot-btn btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
@@ -1726,6 +1775,7 @@ function render() {
   syncModalFocus();
   initMarketCharts(marketWidgetData);
   initDataTables();
+  window.scrollTo(prevScrollX, prevScrollY);
 }
 
 function buildExportBundle(): ExportBundleV2 {
@@ -2491,6 +2541,16 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     first.focus();
   }
+});
+
+window.addEventListener("resize", () => {
+  if (viewportResizeRenderTimer != null) {
+    window.clearTimeout(viewportResizeRenderTimer);
+  }
+  viewportResizeRenderTimer = window.setTimeout(() => {
+    viewportResizeRenderTimer = null;
+    render();
+  }, 120);
 });
 
 void reloadData();

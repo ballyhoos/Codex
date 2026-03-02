@@ -89,8 +89,30 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 0.75rem;
   padding-bottom: 0.5rem;
+}
+
+.section-head > .d-flex {
+  flex: 0 0 auto;
+  flex-wrap: nowrap !important;
+}
+
+.markets-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+}
+
+.markets-section-actions {
+  flex-wrap: nowrap !important;
+  justify-content: flex-end;
+}
+
+.markets-section-actions .btn {
+  white-space: nowrap;
 }
 
 .markets-widget-grid {
@@ -433,6 +455,22 @@ body {
 }
 
 @media (max-width: 767.98px) {
+  .section-head {
+    flex-wrap: wrap;
+  }
+
+  .section-head > .d-flex {
+    flex-wrap: wrap !important;
+  }
+
+  .markets-section-head {
+    display: flex;
+  }
+
+  .markets-section-actions {
+    flex-wrap: wrap !important;
+  }
+
   .markets-widget-grid {
     grid-template-columns: 1fr;
   }
