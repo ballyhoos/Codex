@@ -74,6 +74,8 @@ let dataTablesRetryTimer: number | null = null;
 let pendingAddFilterTimer: number | null = null;
 let hoveredFilterSectionViewId: ViewId | null = null;
 let dataToolsOpen = false;
+let investmentsOpen = false;
+let expandedGrowthMarketIds = new Set<string>();
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
 
@@ -283,11 +285,10 @@ function initDataTables() {
       language: {
         emptyTable: "No categories",
       },
-      ordering: { handler: true, indicators: true },
-      order: [[0, "asc"]],
+      ordering: false,
+      order: [],
       columnDefs: [{ targets: -1, orderable: false }],
     });
-    wireDataTableHeaderSorting(categoriesTable, categoriesTableDt);
   }
 
   if (inventoryTable) {
@@ -760,11 +761,10 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
 function buildCategoryColumns(): ColumnDef<CategoryNode>[] {
   return [
     { key: "name", label: "Name", getValue: (r) => r.name, getDisplay: (r) => r.name, filterable: true, filterOp: "contains" },
-    { key: "parent", label: "Parent", getValue: (r) => getParentCategoryName(r), getDisplay: (r) => getParentCategoryName(r), filterable: true, filterOp: "eq" },
     { key: "path", label: "Market", getValue: (r) => r.pathNames.join(" / "), getDisplay: (r) => r.pathNames.join(" / "), filterable: true, filterOp: "contains" },
     {
       key: "spotValueCents",
-      label: "Value",
+      label: "Spot",
       getValue: (r) => r.spotValueCents ?? "",
       getDisplay: (r) => (r.spotValueCents == null ? "" : formatMoney(r.spotValueCents)),
       filterable: true,
@@ -1071,6 +1071,7 @@ function pickBoundarySnapshotValueCents(capturedAtAsc: ValuationSnapshot[], boun
 function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>): {
   scopeMarketIds: string[];
   rows: GrowthReportRow[];
+  childRowsByParent: Record<string, GrowthReportRow[]>;
   startTotalCents: number;
   endTotalCents: number;
   contributionsTotalCents: number;
@@ -1082,6 +1083,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     return {
       scopeMarketIds: [],
       rows: [],
+      childRowsByParent: {},
       startTotalCents: 0,
       endTotalCents: 0,
       contributionsTotalCents: 0,
@@ -1103,14 +1105,15 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
 
   const activeNonArchivedInventory = state.inventoryRecords.filter((r) => r.active && !r.archived);
   const rows: GrowthReportRow[] = [];
+  const childRowsByParent: Record<string, GrowthReportRow[]> = {};
   let startTotalCents = 0;
   let endTotalCents = 0;
   let contributionsTotalCents = 0;
   let netGrowthTotalCents = 0;
 
-  for (const marketId of scopeMarketIds) {
+  const buildRowForMarket = (marketId: string): GrowthReportRow | null => {
     const market = getCategoryById(marketId);
-    if (!market) continue;
+    if (!market) return null;
     const subtree = categoryDescendantsMap.get(marketId) || new Set([marketId]);
     const snaps = marketSnapshotsById.get(marketId) || [];
     const startValueCents = pickBoundarySnapshotValueCents(snaps, fromMs);
@@ -1132,13 +1135,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
       netGrowthCents == null || startValueCents == null || startValueCents <= 0
         ? null
         : netGrowthCents / startValueCents;
-
-    if (startValueCents != null) startTotalCents += startValueCents;
-    if (endValueCents != null) endTotalCents += endValueCents;
-    contributionsTotalCents += contributionsCents;
-    if (netGrowthCents != null) netGrowthTotalCents += netGrowthCents;
-
-    rows.push({
+    return {
       marketId,
       marketLabel: market.pathNames.join(" / "),
       startValueCents,
@@ -1146,12 +1143,30 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
       contributionsCents,
       netGrowthCents,
       growthPct,
-    });
+    };
+  };
+
+  for (const marketId of scopeMarketIds) {
+    const row = buildRowForMarket(marketId);
+    if (!row) continue;
+    if (row.startValueCents != null) startTotalCents += row.startValueCents;
+    if (row.endValueCents != null) endTotalCents += row.endValueCents;
+    contributionsTotalCents += row.contributionsCents;
+    if (row.netGrowthCents != null) netGrowthTotalCents += row.netGrowthCents;
+    rows.push(row);
+
+    const childRows = state.categories
+      .filter((c) => !c.isArchived && c.active && c.parentId === marketId)
+      .map((c) => buildRowForMarket(c.id))
+      .filter((child): child is GrowthReportRow => child != null)
+      .sort((a, b) => a.marketLabel.localeCompare(b.marketLabel));
+    childRowsByParent[marketId] = childRows;
   }
 
   return {
     scopeMarketIds,
     rows,
+    childRowsByParent,
     startTotalCents,
     endTotalCents,
     contributionsTotalCents,
@@ -1385,6 +1400,10 @@ function render() {
   if (existingDataTools) {
     dataToolsOpen = existingDataTools.open;
   }
+  const existingInvestments = rootEl.querySelector<HTMLDetailsElement>('details[data-section="investments"]');
+  if (existingInvestments) {
+    investmentsOpen = existingInvestments.open;
+  }
   disposeMarketCharts();
   destroyDataTables();
 
@@ -1399,6 +1418,12 @@ function render() {
   const hasCategoryFilters = state.filters.some((filter) => filter.viewId === "categoriesList");
   const marketWidgetData = buildMarketWidgetData(filteredCategories, categoryColumns, hasCategoryFilters);
   const report = buildGrowthReportRows(categoryDescendantsMap);
+  const validExpandedGrowthMarketIds = new Set(
+    [...expandedGrowthMarketIds].filter((id) => (report.childRowsByParent[id]?.length || 0) > 0),
+  );
+  if (validExpandedGrowthMarketIds.size !== expandedGrowthMarketIds.size) {
+    expandedGrowthMarketIds = validExpandedGrowthMarketIds;
+  }
   const reportGrowthPct = report.startTotalCents > 0 ? report.netGrowthTotalCents / report.startTotalCents : null;
 
   const exportText = state.exportText || buildExportJsonText();
@@ -1418,10 +1443,41 @@ function render() {
     })
     .join("");
 
-  const categoriesRowsHtml = filteredCategories
-    .map((c) => `
+  const filteredCategoryIdSet = new Set(filteredCategories.map((c) => c.id));
+  const filteredChildrenByParentId = new Map<string | null, CategoryNode[]>();
+  for (const category of filteredCategories) {
+    const parentId = category.parentId && filteredCategoryIdSet.has(category.parentId) ? category.parentId : null;
+    const siblings = filteredChildrenByParentId.get(parentId) || [];
+    siblings.push(category);
+    filteredChildrenByParentId.set(parentId, siblings);
+  }
+  for (const siblingList of filteredChildrenByParentId.values()) {
+    siblingList.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+  }
+  const orderedCategoriesForTable: Array<{ category: CategoryNode; depth: number }> = [];
+  const visitCategory = (parentId: string | null, depth: number) => {
+    const children = filteredChildrenByParentId.get(parentId) || [];
+    for (const child of children) {
+      orderedCategoriesForTable.push({ category: child, depth });
+      visitCategory(child.id, depth + 1);
+    }
+  };
+  visitCategory(null, 0);
+
+  const categoriesRowsHtml = orderedCategoriesForTable
+    .map(({ category: c, depth }) => `
       <tr class="${[!c.active ? "row-inactive" : "", c.isArchived ? "row-archived" : ""].filter(Boolean).join(" ")}" data-row-edit="category" data-id="${c.id}">
-        ${categoryColumns.map((col) => `<td class="${getColumnAlignClass(col)}">${renderClickableCell("categoriesList", c, col)}</td>`).join("")}
+        ${
+          categoryColumns
+            .map((col) => {
+              if (col.key === "name") {
+                const indentRem = depth > 0 ? (depth - 1) * 1.1 : 0;
+                return `<td class="${getColumnAlignClass(col)}"><div class="market-name-wrap" style="padding-left:${indentRem.toFixed(2)}rem">${depth > 0 ? '<span class="market-child-icon" aria-hidden="true">↳</span>' : ""}${renderClickableCell("categoriesList", c, col)}</div></td>`;
+              }
+              return `<td class="${getColumnAlignClass(col)}">${renderClickableCell("categoriesList", c, col)}</td>`;
+            })
+            .join("")
+        }
         <td class="actions-col-cell">
           <div class="actions-cell">
             <button type="button" class="btn btn-sm btn-outline-primary action-menu-btn" data-action="edit-category" data-id="${c.id}">Edit</button>
@@ -1482,16 +1538,41 @@ function render() {
                   </tr>
                 </thead>
                 <tbody>
-                  ${report.rows.map((row) => `
-                    <tr>
-                      <td>${escapeHtml(row.marketLabel)}</td>
-                      <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
-                      <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
-                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
-                      <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
-                      <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
-                    </tr>
-                  `).join("")}
+                  ${report.rows.map((row) => {
+                    const childRows = report.childRowsByParent[row.marketId] || [];
+                    const expanded = expandedGrowthMarketIds.has(row.marketId);
+                    return `
+                      <tr class="growth-parent-row">
+                        <td>
+                          ${
+                            childRows.length > 0
+                              ? `<button type="button" class="growth-expand-btn" data-action="toggle-growth-children" data-market-id="${escapeHtml(row.marketId)}" aria-label="${expanded ? "Collapse" : "Expand"} child markets">${expanded ? "▾" : "▸"}</button>`
+                              : `<span class="growth-expand-placeholder" aria-hidden="true"></span>`
+                          }
+                          ${escapeHtml(row.marketLabel)}
+                        </td>
+                        <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
+                        <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
+                        <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
+                        <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
+                        <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
+                      </tr>
+                      ${childRows
+                        .map(
+                          (child) => `
+                            <tr class="growth-child-row" ${expanded ? "" : "hidden"}>
+                              <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span>↳ ${escapeHtml(child.marketLabel)}</td>
+                              <td class="text-end">${child.startValueCents == null ? "—" : escapeHtml(formatMoney(child.startValueCents))}</td>
+                              <td class="text-end">${child.endValueCents == null ? "—" : escapeHtml(formatMoney(child.endValueCents))}</td>
+                              <td class="text-end">${escapeHtml(formatMoney(child.contributionsCents))}</td>
+                              <td class="text-end">${child.netGrowthCents == null ? "—" : escapeHtml(formatMoney(child.netGrowthCents))}</td>
+                              <td class="text-end">${escapeHtml(formatPercent(child.growthPct))}</td>
+                            </tr>
+                          `,
+                        )
+                        .join("")}
+                    `;
+                  }).join("")}
                 </tbody>
                 <tfoot>
                   <tr>
@@ -1560,7 +1641,7 @@ function render() {
         </div>
       </section>
 
-      <details class="card shadow-sm details-card" data-filter-section-view-id="inventoryTable">
+      <details class="card shadow-sm details-card" data-filter-section="investments" data-section="investments" data-filter-section-view-id="inventoryTable" ${investmentsOpen ? "open" : ""}>
         <summary class="card-header">Investments</summary>
         <div class="details-content card-body">
           <div class="section-head">
@@ -2184,6 +2265,16 @@ rootEl.addEventListener("click", async (event) => {
     } catch {
       setToast({ tone: "danger", text: "Failed to capture snapshot." });
     }
+    return;
+  }
+  if (action === "toggle-growth-children") {
+    const marketId = actionEl.dataset.marketId;
+    if (!marketId) return;
+    const next = new Set(expandedGrowthMarketIds);
+    if (next.has(marketId)) next.delete(marketId);
+    else next.add(marketId);
+    expandedGrowthMarketIds = next;
+    render();
     return;
   }
   if (action === "edit-category") {
