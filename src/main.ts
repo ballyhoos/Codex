@@ -67,6 +67,7 @@ let categoriesTableDt: DataTableInstanceLike | null = null;
 let inventoryTableDt: DataTableInstanceLike | null = null;
 let marketsDonutChart: EChartsInstanceLike | null = null;
 let marketsTopChart: EChartsInstanceLike | null = null;
+let growthTrendChart: EChartsInstanceLike | null = null;
 let marketChartsResizeHandlerAttached = false;
 let marketChartsResizeTimer: number | null = null;
 let dataTablesLoadHookAttached = false;
@@ -78,7 +79,6 @@ let investmentsOpen = false;
 let expandedGrowthMarketIds = new Set<string>();
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
-let viewportResizeRenderTimer: number | null = null;
 
 let state: AppState = {
   inventoryRecords: [],
@@ -144,12 +144,6 @@ function formatBytes(bytes: number): string {
   return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
-function getViewportDebugText(): string {
-  const width = Math.round(window.innerWidth);
-  const mode = width <= 767 ? "Mobile (<=767px)" : "Desktop/Tablet (>767px)";
-  return `${mode} — ${width}px`;
-}
-
 function formatMoney(cents: number): string {
   const symbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
   const amount = new Intl.NumberFormat(undefined, {
@@ -158,6 +152,26 @@ function formatMoney(cents: number): string {
     maximumFractionDigits: 2,
   }).format(cents / 100);
   return `${symbol}${amount}`;
+}
+
+function formatMoneyCompact(cents: number): string {
+  const symbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
+  const absCents = Math.abs(cents);
+  const absAmount = absCents / 100;
+  let value = absAmount;
+  let suffix = "";
+  if (absAmount >= 1_000_000_000) {
+    value = absAmount / 1_000_000_000;
+    suffix = "b";
+  } else if (absAmount >= 1_000_000) {
+    value = absAmount / 1_000_000;
+    suffix = "m";
+  } else if (absAmount >= 1_000) {
+    value = absAmount / 1_000;
+    suffix = "k";
+  }
+  const sign = cents < 0 ? "-" : "";
+  return `${sign}${symbol}${Math.round(value)}${suffix}`;
 }
 
 function parseMoneyToCents(raw: string): number | null {
@@ -366,8 +380,10 @@ function showMarketChartCanvas(chartId: string) {
 function disposeMarketCharts() {
   marketsDonutChart?.dispose();
   marketsTopChart?.dispose();
+  growthTrendChart?.dispose();
   marketsDonutChart = null;
   marketsTopChart = null;
+  growthTrendChart = null;
 }
 
 function attachMarketChartsResizeHandler() {
@@ -381,7 +397,224 @@ function attachMarketChartsResizeHandler() {
       marketChartsResizeTimer = null;
       marketsDonutChart?.resize();
       marketsTopChart?.resize();
+      growthTrendChart?.resize();
     }, 120);
+  });
+}
+
+type GrowthTimelineSeries = {
+  marketId: string;
+  label: string;
+  values: Array<number | null>;
+};
+
+type GrowthTimelineData = {
+  labels: string[];
+  series: GrowthTimelineSeries[];
+  overallValues: Array<number | null>;
+  showOverallComparison: boolean;
+};
+
+function buildGrowthTimelineData(scopeMarketIds: string[]): GrowthTimelineData {
+  const fromMs = parseYyyyMmDdToMs(state.reportDateFrom);
+  const toMs = parseYyyyMmDdToMs(state.reportDateTo, true);
+  if (fromMs == null || toMs == null || fromMs > toMs) {
+    return { labels: [], series: [], overallValues: [], showOverallComparison: false };
+  }
+
+  const scopeSet = new Set(scopeMarketIds);
+  const hasScopedFilter = state.filters.some((f) => f.viewId === "categoriesList");
+  const capturedAtSet = new Set<string>();
+  const valueByMarketAndCapturedAt = new Map<string, number>();
+  const overallByCapturedAt = new Map<string, number>();
+  for (const snapshot of state.valuationSnapshots) {
+    const capturedMs = Date.parse(snapshot.capturedAt);
+    if (!Number.isFinite(capturedMs) || capturedMs < fromMs || capturedMs > toMs) continue;
+    if (snapshot.scope === "portfolio") {
+      capturedAtSet.add(snapshot.capturedAt);
+      overallByCapturedAt.set(snapshot.capturedAt, snapshot.valueCents);
+      continue;
+    }
+    if (snapshot.scope !== "market" || !snapshot.marketId) continue;
+    capturedAtSet.add(snapshot.capturedAt);
+    if (scopeSet.has(snapshot.marketId)) {
+      const key = `${snapshot.marketId}::${snapshot.capturedAt}`;
+      valueByMarketAndCapturedAt.set(key, (valueByMarketAndCapturedAt.get(key) || 0) + snapshot.valueCents);
+    }
+    // Fallback overall accumulation when dedicated portfolio snapshots are absent.
+    if (!overallByCapturedAt.has(snapshot.capturedAt)) {
+      overallByCapturedAt.set(snapshot.capturedAt, snapshot.valueCents);
+    } else if (!state.valuationSnapshots.some((s) => s.scope === "portfolio" && s.capturedAt === snapshot.capturedAt)) {
+      overallByCapturedAt.set(snapshot.capturedAt, (overallByCapturedAt.get(snapshot.capturedAt) || 0) + snapshot.valueCents);
+    }
+  }
+
+  const capturedAts = [...capturedAtSet].sort((a, b) => Date.parse(a) - Date.parse(b));
+  if (!capturedAts.length) return { labels: [], series: [], overallValues: [], showOverallComparison: hasScopedFilter };
+
+  const labels = capturedAts.map((capturedAt) => {
+    const capturedDate = new Date(capturedAt);
+    return Number.isNaN(capturedDate.getTime()) ? capturedAt.slice(0, 10) : capturedDate.toLocaleDateString();
+  });
+
+  const series = scopeMarketIds
+    .map((marketId) => {
+      const market = getCategoryById(marketId);
+      if (!market) return null;
+      const label = market.pathNames.join(" / ");
+      const values = capturedAts.map((capturedAt) => {
+        const key = `${marketId}::${capturedAt}`;
+        const value = valueByMarketAndCapturedAt.get(key);
+        return typeof value === "number" ? value : null;
+      });
+      const hasAnyValue = values.some((v) => typeof v === "number");
+      if (!hasAnyValue) return null;
+      return { marketId, label, values };
+    })
+    .filter((row): row is GrowthTimelineSeries => row != null);
+
+  const overallValues = capturedAts.map((capturedAt) => {
+    const value = overallByCapturedAt.get(capturedAt);
+    return typeof value === "number" ? value : null;
+  });
+
+  return { labels, series, overallValues, showOverallComparison: hasScopedFilter };
+}
+
+function initGrowthTrendChart(timeline: GrowthTimelineData) {
+  const chartId = "growth-trend-chart";
+  const chartEl = rootEl.querySelector<HTMLElement>(`#${chartId}`);
+  if (!chartEl) return;
+  if (!window.echarts) {
+    showMarketChartMessage(chartId, "Chart unavailable: ECharts not loaded.");
+    return;
+  }
+  const hasOverallData = timeline.overallValues.some((value) => typeof value === "number");
+  const hasScopedSeries = timeline.series.length > 0;
+  if (!timeline.labels.length || (!hasOverallData && !hasScopedSeries)) {
+    showMarketChartMessage(chartId, "No snapshot trend data for this period yet.");
+    return;
+  }
+  showMarketChartCanvas(chartId);
+
+  const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
+  const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
+  const chartFontSize = isMobile ? 11 : 13;
+  const textColor = isDarkTheme ? "#e9ecef" : "#212529";
+  const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
+  const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#0dcaf0", "#198754", "#dc3545"];
+  const labelStep = timeline.labels.length > 12 ? Math.ceil(timeline.labels.length / 6) : 1;
+  growthTrendChart = window.echarts.init(chartEl);
+  growthTrendChart.setOption({
+    color: palette,
+    animationDuration: 450,
+    legend: {
+      type: "scroll",
+      top: 0,
+      textStyle: { color: textColor, fontSize: chartFontSize },
+    },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: {
+        type: "line",
+        lineStyle: {
+          color: isDarkTheme ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.3)",
+          width: 1,
+        },
+      },
+      backgroundColor: isDarkTheme ? "rgba(16,18,22,0.94)" : "rgba(255,255,255,0.97)",
+      borderColor: isDarkTheme ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.12)",
+      textStyle: { color: textColor, fontSize: chartFontSize },
+      formatter: (params: Array<{ axisValueLabel?: string; seriesName?: string; value?: number | null }>) => {
+        if (!params.length) return "";
+        const rows = params
+          .filter((p) => typeof p.value === "number")
+          .map((p) => `${escapeHtml(p.seriesName || "")}: ${formatMoney(p.value as number)}`);
+        return [`<strong>${escapeHtml(params[0]?.axisValueLabel || "")}</strong>`, ...rows].join("<br/>");
+      },
+    },
+    grid: {
+      left: "3.5%",
+      right: "3.5%",
+      top: "16%",
+      bottom: "14%",
+      containLabel: true,
+    },
+    xAxis: {
+      type: "category",
+      data: timeline.labels,
+      boundaryGap: false,
+      axisLabel: {
+        color: mutedTextColor,
+        fontSize: chartFontSize,
+        inside: false,
+        margin: 10,
+        hideOverlap: true,
+        overflow: "truncate",
+        width: 72,
+        interval: (index: number) => index % labelStep === 0 || index === timeline.labels.length - 1,
+      },
+      axisTick: { show: false },
+      axisLine: {
+        lineStyle: { color: mutedTextColor },
+      },
+    },
+    yAxis: {
+      type: "value",
+      position: "left",
+      axisLabel: {
+        color: mutedTextColor,
+        margin: 6,
+        fontSize: chartFontSize,
+        formatter: (value: number) => formatMoneyCompact(value),
+      },
+      axisTick: { show: false },
+      splitLine: {
+        lineStyle: {
+          color: isDarkTheme ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
+        },
+      },
+    },
+    series: [
+      {
+        name: timeline.showOverallComparison ? "Overall (All Markets)" : "Overall",
+        type: "line",
+        color: isDarkTheme ? "#f8f9fa" : "#111827",
+        smooth: 0.28,
+        symbol: "circle",
+        showSymbol: true,
+        symbolSize: 9,
+        emphasis: {
+          focus: "series",
+          scale: false,
+        },
+        connectNulls: false,
+        data: timeline.overallValues,
+        lineStyle: {
+          width: 3.2,
+          color: isDarkTheme ? "#f8f9fa" : "#111827",
+          type: "dashed",
+        },
+        itemStyle: {
+          color: isDarkTheme ? "#f8f9fa" : "#111827",
+        },
+      },
+      ...timeline.series.map((series, idx) => ({
+        name: series.label,
+        type: "line",
+        smooth: 0.3,
+        symbol: "circle",
+        showSymbol: true,
+        symbolSize: 8,
+        emphasis: {
+          focus: "series",
+          scale: false,
+        },
+        connectNulls: false,
+        data: series.values,
+        lineStyle: { width: idx === 0 ? 2.6 : 2 },
+      })),
+    ],
   });
 }
 
@@ -412,6 +645,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
 
   const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
   const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
+  const chartFontSize = isMobile ? 11 : 13;
   const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
   const chartTextColor = isDarkTheme ? "#e9ecef" : "#212529";
   const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
@@ -428,6 +662,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
     color: palette,
     tooltip: {
       trigger: "item",
+      textStyle: { fontSize: chartFontSize },
       formatter: (params: { name: string; value: number; percent?: number }) =>
         `${escapeHtml(params.name)}: ${formatMoney(params.value)} (${params.percent ?? 0}%)`,
     },
@@ -436,14 +671,14 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         orient: "horizontal",
         bottom: 0,
         icon: "circle",
-        textStyle: { color: chartTextColor },
+        textStyle: { color: chartTextColor, fontSize: chartFontSize },
       }
       : {
         orient: "vertical",
         right: 0,
         top: "center",
         icon: "circle",
-        textStyle: { color: chartTextColor },
+        textStyle: { color: chartTextColor, fontSize: chartFontSize },
       },
     series: [
       {
@@ -466,7 +701,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
           borderWidth: 1,
           borderRadius: 4,
           padding: [2, 5],
-          fontSize: 10,
+          fontSize: chartFontSize,
           textBorderWidth: 0,
           formatter: (params: { percent?: number }) => {
             const pct = params.percent ?? 0;
@@ -501,7 +736,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
     color: ["#198754"],
     grid: {
       left: "4%",
-      right: "6%",
+      right: "4%",
       top: "8%",
       bottom: "2%",
       containLabel: true,
@@ -509,6 +744,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "shadow" },
+      textStyle: { fontSize: chartFontSize },
       formatter: (params: Array<{ name: string; value: number }>) => {
         const row = params[0];
         if (!row) return "";
@@ -528,6 +764,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
       data: topRowsDisplay.map((row) => row.label),
       axisLabel: {
         color: mutedTextColor,
+        fontSize: chartFontSize,
         formatter: (value: string) => truncateLabel(value),
       },
       axisTick: { show: false },
@@ -546,6 +783,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
           show: true,
           position: "right",
           color: chartTextColor,
+          fontSize: chartFontSize,
           formatter: (params: { value: number }) => formatMoney(params.value),
         },
       },
@@ -1466,6 +1704,7 @@ function render() {
   const hasCategoryFilters = state.filters.some((filter) => filter.viewId === "categoriesList");
   const marketWidgetData = buildMarketWidgetData(filteredCategories, categoryColumns, hasCategoryFilters);
   const report = buildGrowthReportRows(categoryDescendantsMap);
+  const growthTimelineData = buildGrowthTimelineData(report.scopeMarketIds);
   const validExpandedGrowthMarketIds = new Set(
     [...expandedGrowthMarketIds].filter((id) => (report.childRowsByParent[id]?.length || 0) > 0),
   );
@@ -1542,7 +1781,6 @@ function render() {
           <div>
             <h1 class="display-6 mb-1">Investments</h1>
             <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
-            <p class="small text-body-secondary mb-0">Viewport debug: ${escapeHtml(getViewportDebugText())}</p>
           </div>
           <div class="d-flex align-items-center gap-2">
             <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
@@ -1570,6 +1808,14 @@ function render() {
             </label>
             <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
+          </div>
+          <div class="growth-widget-card card border-0 mb-2">
+            <div class="card-body p-1 p-md-2">
+              <div class="growth-chart-frame">
+                <div id="growth-trend-chart" class="growth-chart-canvas" role="img" aria-label="Growth over time chart"></div>
+                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="growth-trend-chart" hidden></p>
+              </div>
+            </div>
           </div>
           ${report.rows.length === 0 ? `
             <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
@@ -1651,19 +1897,17 @@ function render() {
         <div class="markets-widget-grid mb-2">
           <article class="markets-widget-card card border-0">
             <div class="card-body p-0 p-md-1">
-              <h3 class="h6 mb-2">Allocation</h3>
               <div class="markets-chart-frame">
-                <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
-                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
+                <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
+                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
               </div>
             </div>
           </article>
           <article class="markets-widget-card card border-0">
             <div class="card-body p-0 p-md-1">
-              <h3 class="h6 mb-2">Top Markets by Value</h3>
               <div class="markets-chart-frame">
-                <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
-                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
+                <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
+                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
               </div>
             </div>
           </article>
@@ -1774,6 +2018,7 @@ function render() {
   if (categoryForm) syncCategoryEvaluationFields(categoryForm);
   syncModalFocus();
   initMarketCharts(marketWidgetData);
+  initGrowthTrendChart(growthTimelineData);
   initDataTables();
   window.scrollTo(prevScrollX, prevScrollY);
 }
@@ -2541,16 +2786,6 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     first.focus();
   }
-});
-
-window.addEventListener("resize", () => {
-  if (viewportResizeRenderTimer != null) {
-    window.clearTimeout(viewportResizeRenderTimer);
-  }
-  viewportResizeRenderTimer = window.setTimeout(() => {
-    viewportResizeRenderTimer = null;
-    render();
-  }, 120);
 });
 
 void reloadData();
