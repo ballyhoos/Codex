@@ -27,6 +27,7 @@ export interface CategoryNode {
   sortOrder: number;
   evaluationMode?: "spot" | "snapshot";
   spotValueCents?: number;
+  spotCode?: string;
   active: boolean;
   isArchived: boolean;
   archivedAt?: string;

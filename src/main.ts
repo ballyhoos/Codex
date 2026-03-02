@@ -95,6 +95,7 @@ let state: AppState = {
 
 const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
+const DEFAULT_DARK_MODE = true;
 const CURRENCY_SYMBOL_OPTIONS = [
   { value: "$", label: "Dollar ($)" },
   { value: "€", label: "Euro (€)" },
@@ -160,6 +161,12 @@ function parseMoneyToCents(raw: string): number | null {
 
 function getSettingValue<T = unknown>(key: string): T | undefined {
   return state.settings.find((s) => s.key === key)?.value as T | undefined;
+}
+
+function applyThemeFromSettings(settings: AppSetting[]) {
+  const darkModeSetting = settings.find((s) => s.key === "darkMode")?.value;
+  const isDark = typeof darkModeSetting === "boolean" ? darkModeSetting : DEFAULT_DARK_MODE;
+  document.documentElement.setAttribute("data-bs-theme", isDark ? "dark" : "light");
 }
 
 function setState(next: Partial<AppState>) {
@@ -267,12 +274,12 @@ function initDataTables() {
 
   if (categoriesTable) {
     categoriesTableDt = makeDt(categoriesTable, {
-      dom: "t<'dt-bottom-row row align-items-center g-2 mt-2'<'col-md-4'i><'col-md-4 d-flex justify-content-md-center justify-content-start'l><'col-md-4 d-flex justify-content-md-end justify-content-start'p>>",
+      dom: "t<'dt-bottom-row row align-items-center g-2 mt-2'<'col-md-6'i><'col-md-6 d-flex justify-content-md-end justify-content-start'p>>",
       paging: true,
-      pageLength: 10,
+      pageLength: 100,
       searching: false,
       info: true,
-      lengthChange: true,
+      lengthChange: false,
       language: {
         emptyTable: "No categories",
       },
@@ -285,12 +292,12 @@ function initDataTables() {
 
   if (inventoryTable) {
     inventoryTableDt = makeDt(inventoryTable, {
-      dom: "t<'dt-bottom-row row align-items-center g-2 mt-2'<'col-md-4'i><'col-md-4 d-flex justify-content-md-center justify-content-start'l><'col-md-4 d-flex justify-content-md-end justify-content-start'p>>",
+      dom: "t<'dt-bottom-row row align-items-center g-2 mt-2'<'col-md-6'i><'col-md-6 d-flex justify-content-md-end justify-content-start'p>>",
       paging: true,
-      pageLength: 10,
+      pageLength: 100,
       searching: false,
       info: true,
-      lengthChange: true,
+      lengthChange: false,
       language: {
         emptyTable: "No inventory records",
       },
@@ -396,7 +403,11 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
   showMarketChartCanvas(topId);
 
   const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
+  const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
   const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
+  const chartTextColor = isDarkTheme ? "#e9ecef" : "#212529";
+  const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
+  const valueLabelColor = isDarkTheme ? "#f8f9fa" : "#212529";
   const donutSeriesData = widgetData.map((row) => ({ name: row.label, value: row.totalCents }));
   const topRows = widgetData.slice(0, 5);
   const topRowsDisplay = [...topRows].reverse();
@@ -417,12 +428,14 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         orient: "horizontal",
         bottom: 0,
         icon: "circle",
+        textStyle: { color: chartTextColor },
       }
       : {
         orient: "vertical",
         right: 0,
         top: "center",
         icon: "circle",
+        textStyle: { color: chartTextColor },
       },
     series: [
       {
@@ -433,10 +446,19 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         avoidLabelOverlap: true,
         label: {
           show: !isMobile,
+          color: chartTextColor,
           formatter: "{d}%",
         },
         labelLine: {
           show: !isMobile,
+          lineStyle: {
+            color: mutedTextColor,
+          },
+        },
+        emphasis: {
+          label: {
+            color: chartTextColor,
+          },
         },
       },
     ],
@@ -472,6 +494,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
       type: "category",
       data: topRowsDisplay.map((row) => row.label),
       axisLabel: {
+        color: mutedTextColor,
         formatter: (value: string) => truncateLabel(value),
       },
       axisTick: { show: false },
@@ -488,7 +511,8 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         },
         label: {
           show: true,
-          position: "right",
+          position: "insideRight",
+          color: valueLabelColor,
           formatter: (params: { value: number }) => formatMoney(params.value),
         },
       },
@@ -541,6 +565,11 @@ async function reloadData() {
     await putSetting("currencySymbol", DEFAULT_CURRENCY_SYMBOL);
     settings.push({ key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL });
   }
+  if (!settings.some((s) => s.key === "darkMode")) {
+    await putSetting("darkMode", DEFAULT_DARK_MODE);
+    settings.push({ key: "darkMode", value: DEFAULT_DARK_MODE });
+  }
+  applyThemeFromSettings(settings);
   let storageUsageBytes: number | null = null;
   let storageQuotaBytes: number | null = null;
   try {
@@ -632,10 +661,14 @@ function syncCategoryEvaluationFields(form: HTMLFormElement) {
   const evaluationEl = form.querySelector<HTMLSelectElement>('select[name="evaluationMode"]');
   const spotGroupEl = form.querySelector<HTMLElement>("[data-spot-value-group]");
   const spotInputEl = form.querySelector<HTMLInputElement>('input[name="spotValue"]');
-  if (!evaluationEl || !spotGroupEl || !spotInputEl) return;
+  const spotCodeGroupEl = form.querySelector<HTMLElement>("[data-spot-code-group]");
+  const spotCodeInputEl = form.querySelector<HTMLInputElement>('input[name="spotCode"]');
+  if (!evaluationEl || !spotGroupEl || !spotInputEl || !spotCodeGroupEl || !spotCodeInputEl) return;
   const isSpot = evaluationEl.value === "spot";
   spotGroupEl.hidden = !isSpot;
   spotInputEl.disabled = !isSpot;
+  spotCodeGroupEl.hidden = !isSpot;
+  spotCodeInputEl.disabled = !isSpot;
 }
 
 function getParentCategoryName(category: CategoryNode): string {
@@ -854,7 +887,7 @@ async function captureValuationSnapshot() {
   });
 }
 
-function renderFilterChips(viewId: ViewId, title: string) {
+function renderFilterChips(viewId: ViewId, title: string, rightSideHtml = "") {
   const chips = state.filters.filter((f) => f.viewId === viewId);
   return `
     <div class="chips-wrap mb-2">
@@ -879,6 +912,7 @@ function renderFilterChips(viewId: ViewId, title: string) {
           </nav>
         </div>
       ` : `<div class="chips-list"><span class="chips-empty text-body-secondary small">No filters</span></div>`}
+      ${rightSideHtml ? `<div class="chips-clear-btn">${rightSideHtml}</div>` : ""}
     </div>
   `;
 }
@@ -1137,9 +1171,13 @@ function renderModal(): string {
                     ${CURRENCY_SYMBOL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt.value)}" ${((getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL) === opt.value) ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
                   </select>
                 </label>
+                <label class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" name="darkMode" ${getSettingValue<boolean>("darkMode") ?? DEFAULT_DARK_MODE ? "checked" : ""} />
+                  <span class="form-check-label">Dark mode</span>
+                </label>
               </div>
               <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
+                <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save settings</button>
               </div>
             </form>
@@ -1194,10 +1232,21 @@ function renderModal(): string {
                 <input class="form-control" type="number" step="0.01" min="0" name="spotValue" value="${escapeHtml(moneyInputFromCents(category?.spotValueCents))}" ${category?.evaluationMode === "spot" ? "" : "disabled"} />
               </div>
             </label>
+            <label class="form-label mb-0" data-spot-code-group ${category?.evaluationMode === "spot" ? "" : "hidden"}>
+              Code
+              <input
+                class="form-control"
+                name="spotCode"
+                maxlength="64"
+                placeholder="e.g. XAGUSD"
+                value="${escapeHtml(category?.spotCode || "")}"
+                ${category?.evaluationMode === "spot" ? "" : "disabled"}
+              />
+            </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
             <div class="modal-footer px-0 pb-0">
-              ${editing && category ? `<button type="button" class="btn ${category.isArchived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-category-subtree-archived" data-id="${category.id}" data-next-archived="${String(!category.isArchived)}">${category.isArchived ? "Restore Record" : "Archive Record"}</button>` : ""}
-              <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
+              ${editing && category ? `<button type="button" class="btn ${category.isArchived ? "btn-outline-success" : "btn-danger archive-record-btn"} me-auto" data-action="toggle-category-subtree-archived" data-id="${category.id}" data-next-archived="${String(!category.isArchived)}">${category.isArchived ? "Restore Record" : "Archive Record"}</button>` : ""}
+              <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">${editing ? "Save" : "Create"}</button>
             </div>
           </form>
@@ -1243,7 +1292,7 @@ function renderModal(): string {
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" checked /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3"></textarea></label>
             <div class="modal-footer px-0 pb-0">
-              <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
+              <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">Create</button>
             </div>
           </form>
@@ -1292,8 +1341,8 @@ function renderModal(): string {
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${purchase.active ? "checked" : ""} /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3">${escapeHtml(purchase.notes || "")}</textarea></label>
             <div class="modal-footer px-0 pb-0">
-              <button type="button" class="btn ${purchase.archived ? "btn-outline-success" : "btn-outline-warning"} me-auto" data-action="toggle-inventory-archived" data-id="${purchase.id}" data-next-archived="${String(!purchase.archived)}">${purchase.archived ? "Restore Record" : "Archive Record"}</button>
-              <button type="button" class="btn btn-outline-secondary" data-action="close-modal">Cancel</button>
+              <button type="button" class="btn ${purchase.archived ? "btn-outline-success" : "btn-danger archive-record-btn"} me-auto" data-action="toggle-inventory-archived" data-id="${purchase.id}" data-next-archived="${String(!purchase.archived)}">${purchase.archived ? "Restore Record" : "Archive Record"}</button>
+              <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">Save</button>
             </div>
           </form>
@@ -1380,15 +1429,14 @@ function render() {
               <span class="small text-body-secondary">
                 Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
               </span>
-              <button type="button" class="btn btn-outline-success btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
             </div>
           </div>
-          <div class="d-flex align-items-end gap-2 flex-wrap my-2">
-            <label class="form-label mb-0">From
-              <input class="form-control form-control-sm" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
+          <div class="growth-report-controls d-flex align-items-center gap-2 flex-wrap my-2">
+            <label class="form-label mb-0 growth-control-label">From
+              <input class="form-control form-control-sm growth-control-input" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
             </label>
-            <label class="form-label mb-0">To
-              <input class="form-control form-control-sm" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
+            <label class="form-label mb-0 growth-control-label">To
+              <input class="form-control form-control-sm growth-control-input" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
             </label>
             <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
@@ -1441,7 +1489,7 @@ function render() {
         <div class="section-head">
           <h2 class="h5 mb-0">Markets</h2>
           <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
-            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+            <button type="button" class="btn btn-warning capture-snapshot-btn btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
@@ -1465,7 +1513,11 @@ function render() {
             </div>
           </article>
         </div>
-        ${renderFilterChips("categoriesList", "Markets")}
+        ${renderFilterChips(
+          "categoriesList",
+          "Markets",
+          `<label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>`,
+        )}
         <div class="table-wrap table-responsive">
           <table id="categories-table" class="table table-striped table-sm table-hover align-middle mb-0">
             <thead>
@@ -1489,11 +1541,14 @@ function render() {
           <div class="section-head">
             <h2 class="h5 mb-0 visually-hidden">Investments</h2>
             <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end w-100">
-              <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
               <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
             </div>
           </div>
-          ${renderFilterChips("inventoryTable", "Investments")}
+          ${renderFilterChips(
+            "inventoryTable",
+            "Investments",
+            `<label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>`,
+          )}
           <div class="table-wrap table-responsive">
             <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
               <thead>
@@ -1596,6 +1651,7 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const fd = new FormData(form);
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
+  const darkMode = fd.get("darkMode") === "on";
   if (!/^[A-Z]{3}$/.test(currencyCode)) {
     alert("Currency code must be a 3-letter code like USD.");
     return;
@@ -1606,6 +1662,7 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   }
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
+  await putSetting("darkMode", darkMode);
   closeModal();
   await reloadData();
 }
@@ -1618,11 +1675,13 @@ async function handleCategorySubmit(form: HTMLFormElement) {
   const parentIdRaw = String(fd.get("parentId") || "").trim();
   const evaluationModeRaw = String(fd.get("evaluationMode") || "").trim();
   const spotValueRaw = String(fd.get("spotValue") || "").trim();
+  const spotCodeRaw = String(fd.get("spotCode") || "").trim();
   const active = fd.get("active") === "on";
   const evaluationMode = evaluationModeRaw === "spot" || evaluationModeRaw === "snapshot" ? evaluationModeRaw : undefined;
   const parsedSpotValueCents = evaluationMode === "spot"
     ? (spotValueRaw ? parseMoneyToCents(spotValueRaw) : undefined)
     : undefined;
+  const spotCode = evaluationMode === "spot" && spotCodeRaw ? spotCodeRaw : undefined;
   if (!name) return;
   if (evaluationMode === "spot" && spotValueRaw && parsedSpotValueCents == null) {
     alert("Spot value is invalid.");
@@ -1655,6 +1714,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     existing.parentId = parentId;
     existing.evaluationMode = evaluationMode;
     existing.spotValueCents = spotValueCents;
+    existing.spotCode = spotCode;
     existing.active = active;
     if (parentChanged) {
       existing.sortOrder = state.categories.filter((c) => c.parentId === parentId && c.id !== existing.id).length;
@@ -1678,6 +1738,7 @@ async function handleCategorySubmit(form: HTMLFormElement) {
     sortOrder: siblingCount,
     evaluationMode,
     spotValueCents,
+    spotCode,
     active,
     isArchived: false,
     createdAt: now,
@@ -1817,6 +1878,7 @@ function normalizeImportedCategory(raw: any): CategoryNode {
     sortOrder: Number.isFinite(raw.sortOrder) ? Number(raw.sortOrder) : 0,
     evaluationMode: raw.evaluationMode === "spot" || raw.evaluationMode === "snapshot" ? raw.evaluationMode : "snapshot",
     spotValueCents: raw.spotValueCents == null || raw.spotValueCents === "" ? undefined : Number(raw.spotValueCents),
+    spotCode: raw.spotCode == null || raw.spotCode === "" ? undefined : String(raw.spotCode),
     active: typeof raw.active === "boolean" ? raw.active : true,
     isArchived: typeof raw.isArchived === "boolean" ? raw.isArchived : false,
     archivedAt: raw.archivedAt ? String(raw.archivedAt) : undefined,
@@ -1910,6 +1972,7 @@ async function handleReplaceImport() {
       : [
         { key: "currencyCode", value: DEFAULT_CURRENCY },
         { key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL },
+        { key: "darkMode", value: DEFAULT_DARK_MODE },
       ];
     const valuationSnapshots: ValuationSnapshot[] =
       parsed.schemaVersion === 2 && Array.isArray(parsed.valuationSnapshots)
