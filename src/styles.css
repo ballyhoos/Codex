@@ -515,6 +515,7 @@ body {
   .growth-chart-canvas {
     min-height: 190px;
   }
+
 }
 
 .details-card > summary::-webkit-details-marker {
