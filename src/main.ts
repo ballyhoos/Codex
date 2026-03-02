@@ -1855,7 +1855,7 @@ function render() {
                       ${childRows
                         .map(
                           (child) => `
-                            <tr class="growth-child-row" ${expanded ? "" : "hidden"}>
+                            <tr class="growth-child-row" data-parent-market-id="${escapeHtml(row.marketId)}" ${expanded ? "" : "hidden"}>
                               <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span>↳ ${escapeHtml(child.marketLabel)}</td>
                               <td class="text-end">${child.startValueCents == null ? "—" : escapeHtml(formatMoney(child.startValueCents))}</td>
                               <td class="text-end">${child.endValueCents == null ? "—" : escapeHtml(formatMoney(child.endValueCents))}</td>
@@ -2021,6 +2021,21 @@ function render() {
   initGrowthTrendChart(growthTimelineData);
   initDataTables();
   window.scrollTo(prevScrollX, prevScrollY);
+}
+
+function setGrowthChildrenExpandedInDom(marketId: string, expanded: boolean) {
+  const childRows = rootEl.querySelectorAll<HTMLTableRowElement>(`tr.growth-child-row[data-parent-market-id="${marketId}"]`);
+  if (!childRows.length) return;
+  for (const row of childRows) {
+    row.hidden = !expanded;
+  }
+  const toggleBtn = rootEl.querySelector<HTMLButtonElement>(
+    `button[data-action="toggle-growth-children"][data-market-id="${marketId}"]`,
+  );
+  if (toggleBtn) {
+    toggleBtn.textContent = expanded ? "▾" : "▸";
+    toggleBtn.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} child markets`);
+  }
 }
 
 function buildExportBundle(): ExportBundleV2 {
@@ -2566,10 +2581,11 @@ rootEl.addEventListener("click", async (event) => {
     const marketId = actionEl.dataset.marketId;
     if (!marketId) return;
     const next = new Set(expandedGrowthMarketIds);
-    if (next.has(marketId)) next.delete(marketId);
-    else next.add(marketId);
+    const willExpand = !next.has(marketId);
+    if (willExpand) next.add(marketId);
+    else next.delete(marketId);
     expandedGrowthMarketIds = next;
-    render();
+    setGrowthChildrenExpandedInDom(marketId, willExpand);
     return;
   }
   if (action === "edit-category") {
