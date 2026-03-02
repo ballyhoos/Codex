@@ -48,9 +48,27 @@ type DataTableInstanceLike = {
   order?: (value?: Array<[number, "asc" | "desc"]>) => Array<[number, "asc" | "desc"]> | DataTableInstanceLike;
   draw?: (resetPaging?: boolean) => unknown;
 };
+type EChartsInstanceLike = {
+  setOption: (option: Record<string, unknown>, opts?: Record<string, unknown>) => void;
+  resize: () => void;
+  dispose: () => void;
+};
+type EChartsLike = {
+  init: (el: HTMLElement) => EChartsInstanceLike;
+};
+
+declare global {
+  interface Window {
+    echarts?: EChartsLike;
+  }
+}
 
 let categoriesTableDt: DataTableInstanceLike | null = null;
 let inventoryTableDt: DataTableInstanceLike | null = null;
+let marketsDonutChart: EChartsInstanceLike | null = null;
+let marketsTopChart: EChartsInstanceLike | null = null;
+let marketChartsResizeHandlerAttached = false;
+let marketChartsResizeTimer: number | null = null;
 let dataTablesLoadHookAttached = false;
 let dataTablesRetryTimer: number | null = null;
 let pendingAddFilterTimer: number | null = null;
@@ -283,6 +301,201 @@ function initDataTables() {
     wireDataTableHeaderSorting(inventoryTable, inventoryTableDt);
   }
 
+}
+
+type MarketWidgetDatum = {
+  id: string;
+  label: string;
+  totalCents: number;
+};
+
+function buildMarketWidgetData(
+  filteredCategories: CategoryNode[],
+  categoryColumns: ColumnDef<CategoryNode>[],
+  hasCategoryFilters: boolean,
+): MarketWidgetDatum[] {
+  const totalColumn = categoryColumns.find((c) => c.key === "computedTotalCents");
+  if (!totalColumn) return [];
+  const scopeRows = hasCategoryFilters ? filteredCategories : filteredCategories.filter((category) => category.parentId == null);
+  return scopeRows
+    .map((category) => {
+      const rawValue = totalColumn.getValue(category);
+      if (typeof rawValue !== "number" || !Number.isFinite(rawValue) || rawValue <= 0) return null;
+      return {
+        id: category.id,
+        label: category.pathNames.join(" / "),
+        totalCents: rawValue,
+      };
+    })
+    .filter((row): row is MarketWidgetDatum => row != null)
+    .sort((a, b) => b.totalCents - a.totalCents);
+}
+
+function showMarketChartMessage(chartId: string, message: string) {
+  const chartEl = rootEl.querySelector<HTMLElement>(`#${chartId}`);
+  const emptyEl = rootEl.querySelector<HTMLElement>(`[data-chart-empty-for="${chartId}"]`);
+  if (chartEl) chartEl.classList.add("d-none");
+  if (emptyEl) {
+    emptyEl.textContent = message;
+    emptyEl.hidden = false;
+  }
+}
+
+function showMarketChartCanvas(chartId: string) {
+  const chartEl = rootEl.querySelector<HTMLElement>(`#${chartId}`);
+  const emptyEl = rootEl.querySelector<HTMLElement>(`[data-chart-empty-for="${chartId}"]`);
+  if (chartEl) chartEl.classList.remove("d-none");
+  if (emptyEl) emptyEl.hidden = true;
+}
+
+function disposeMarketCharts() {
+  marketsDonutChart?.dispose();
+  marketsTopChart?.dispose();
+  marketsDonutChart = null;
+  marketsTopChart = null;
+}
+
+function attachMarketChartsResizeHandler() {
+  if (marketChartsResizeHandlerAttached) return;
+  marketChartsResizeHandlerAttached = true;
+  window.addEventListener("resize", () => {
+    if (marketChartsResizeTimer != null) {
+      window.clearTimeout(marketChartsResizeTimer);
+    }
+    marketChartsResizeTimer = window.setTimeout(() => {
+      marketChartsResizeTimer = null;
+      marketsDonutChart?.resize();
+      marketsTopChart?.resize();
+    }, 120);
+  });
+}
+
+function truncateLabel(value: string, maxLength = 26): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
+function initMarketCharts(widgetData: MarketWidgetDatum[]) {
+  const donutId = "markets-allocation-chart";
+  const topId = "markets-top-chart";
+  const donutEl = rootEl.querySelector<HTMLElement>(`#${donutId}`);
+  const topEl = rootEl.querySelector<HTMLElement>(`#${topId}`);
+  if (!donutEl || !topEl) return;
+
+  if (!window.echarts) {
+    showMarketChartMessage(donutId, "Chart unavailable: ECharts not loaded.");
+    showMarketChartMessage(topId, "Chart unavailable: ECharts not loaded.");
+    return;
+  }
+
+  if (widgetData.length === 0) {
+    showMarketChartMessage(donutId, "No eligible market totals to chart.");
+    showMarketChartMessage(topId, "No eligible market totals to chart.");
+    return;
+  }
+  showMarketChartCanvas(donutId);
+  showMarketChartCanvas(topId);
+
+  const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
+  const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
+  const donutSeriesData = widgetData.map((row) => ({ name: row.label, value: row.totalCents }));
+  const topRows = widgetData.slice(0, 5);
+  const topRowsDisplay = [...topRows].reverse();
+  const topMax = topRows.reduce((max, row) => Math.max(max, row.totalCents), 0);
+  const topAxisMax = topMax > 0 ? Math.ceil(topMax * 1.2) : 1;
+  marketsDonutChart = window.echarts.init(donutEl);
+  marketsTopChart = window.echarts.init(topEl);
+
+  marketsDonutChart.setOption({
+    color: palette,
+    tooltip: {
+      trigger: "item",
+      formatter: (params: { name: string; value: number; percent?: number }) =>
+        `${escapeHtml(params.name)}: ${formatMoney(params.value)} (${params.percent ?? 0}%)`,
+    },
+    legend: isMobile
+      ? {
+        orient: "horizontal",
+        bottom: 0,
+        icon: "circle",
+      }
+      : {
+        orient: "vertical",
+        right: 0,
+        top: "center",
+        icon: "circle",
+      },
+    series: [
+      {
+        type: "pie",
+        radius: ["55%", "78%"],
+        center: isMobile ? ["50%", "44%"] : ["36%", "50%"],
+        data: donutSeriesData,
+        avoidLabelOverlap: true,
+        label: {
+          show: !isMobile,
+          formatter: "{d}%",
+        },
+        labelLine: {
+          show: !isMobile,
+        },
+      },
+    ],
+  });
+
+  marketsTopChart.setOption({
+    color: ["#198754"],
+    grid: {
+      left: "4%",
+      right: "6%",
+      top: "8%",
+      bottom: "2%",
+      containLabel: true,
+    },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      formatter: (params: Array<{ name: string; value: number }>) => {
+        const row = params[0];
+        if (!row) return "";
+        return `${escapeHtml(row.name)}: ${formatMoney(row.value)}`;
+      },
+    },
+    xAxis: {
+      type: "value",
+      max: topAxisMax,
+      axisLabel: { show: false },
+      splitLine: { show: false },
+      axisTick: { show: false },
+      axisLine: { show: false },
+    },
+    yAxis: {
+      type: "category",
+      data: topRowsDisplay.map((row) => row.label),
+      axisLabel: {
+        formatter: (value: string) => truncateLabel(value),
+      },
+      axisTick: { show: false },
+      axisLine: { show: false },
+    },
+    series: [
+      {
+        type: "bar",
+        data: topRowsDisplay.map((row) => row.totalCents),
+        barMaxWidth: 24,
+        showBackground: true,
+        backgroundStyle: {
+          color: "rgba(25, 135, 84, 0.08)",
+        },
+        label: {
+          show: true,
+          position: "right",
+          formatter: (params: { value: number }) => formatMoney(params.value),
+        },
+      },
+    ],
+  });
+
+  attachMarketChartsResizeHandler();
 }
 
 function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInstanceLike | null) {
@@ -1098,6 +1311,7 @@ function render() {
   if (existingDataTools) {
     dataToolsOpen = existingDataTools.open;
   }
+  disposeMarketCharts();
   destroyDataTables();
 
   const {
@@ -1108,6 +1322,8 @@ function render() {
     filteredCategories,
     categoryTotals,
   } = getDerived();
+  const hasCategoryFilters = state.filters.some((filter) => filter.viewId === "categoriesList");
+  const marketWidgetData = buildMarketWidgetData(filteredCategories, categoryColumns, hasCategoryFilters);
   const report = buildGrowthReportRows(categoryDescendantsMap);
   const reportGrowthPct = report.startTotalCents > 0 ? report.netGrowthTotalCents / report.startTotalCents : null;
 
@@ -1229,6 +1445,26 @@ function render() {
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
+        <div class="markets-widget-grid mb-2">
+          <article class="markets-widget-card card border-0">
+            <div class="card-body p-2 p-md-3">
+              <h3 class="h6 mb-2">Allocation</h3>
+              <div class="markets-chart-frame">
+                <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
+                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
+              </div>
+            </div>
+          </article>
+          <article class="markets-widget-card card border-0">
+            <div class="card-body p-2 p-md-3">
+              <h3 class="h6 mb-2">Top Markets by Value</h3>
+              <div class="markets-chart-frame">
+                <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
+                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
+              </div>
+            </div>
+          </article>
+        </div>
         ${renderFilterChips("categoriesList", "Markets")}
         <div class="table-wrap table-responsive">
           <table id="categories-table" class="table table-striped table-sm table-hover align-middle mb-0">
@@ -1327,6 +1563,7 @@ function render() {
   const categoryForm = rootEl.querySelector<HTMLFormElement>("#category-form");
   if (categoryForm) syncCategoryEvaluationFields(categoryForm);
   syncModalFocus();
+  initMarketCharts(marketWidgetData);
   initDataTables();
 }
 

@@ -101,6 +101,19 @@ Current placement order:
 - If grand totals are required, place them in the table footer (`<tfoot>`) instead of above the table
 - Footer totals should use the same summary/footer styling treatment as other DataTable footers
 
+## Markets Widget Conventions (Chart Summaries)
+
+When the Markets section includes chart widgets, follow these rules:
+
+- Render widget cards between the section header and the filter breadcrumb row
+- Keep widgets informational only; they do not replace table totals or table filtering
+- Widget scope follows current Markets filters (same `categoriesList` filter context as visible rows)
+- Widget metric uses Market `Total` values from existing table semantics
+  - `Snapshot` markets: computed investment total
+  - `Spot` markets: computed quantity × value
+- Exclude non-numeric and non-positive totals from chart series
+- For mobile screens, stack widget cards vertically and keep fixed chart heights for legibility
+
 ## Column Alignment Conventions
 
 Strict alignment rule:
