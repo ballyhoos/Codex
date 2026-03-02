@@ -95,7 +95,7 @@ let state: AppState = {
 
 const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
-const DEFAULT_DARK_MODE = true;
+const DEFAULT_DARK_MODE = false;
 const CURRENCY_SYMBOL_OPTIONS = [
   { value: "$", label: "Dollar ($)" },
   { value: "€", label: "Euro (€)" },
@@ -440,24 +440,49 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
     series: [
       {
         type: "pie",
-        radius: ["55%", "78%"],
-        center: isMobile ? ["50%", "44%"] : ["36%", "50%"],
+        z: 10,
+        radius: ["36%", "54%"],
+        center: isMobile ? ["50%", "50%"] : ["46%", "50%"],
         data: donutSeriesData,
-        avoidLabelOverlap: true,
+        avoidLabelOverlap: false,
+        labelLayout: {
+          hideOverlap: false,
+        },
+        minShowLabelAngle: 0,
         label: {
-          show: !isMobile,
-          color: chartTextColor,
-          formatter: "{d}%",
+          show: true,
+          position: "outside",
+          color: "#212529",
+          backgroundColor: "rgba(255, 255, 255, 0.92)",
+          borderColor: "rgba(0, 0, 0, 0.2)",
+          borderWidth: 1,
+          borderRadius: 4,
+          padding: [2, 5],
+          fontSize: 10,
+          textBorderWidth: 0,
+          formatter: (params: { percent?: number }) => {
+            const pct = params.percent ?? 0;
+            return `${Math.round(pct)}%`;
+          },
         },
         labelLine: {
-          show: !isMobile,
+          show: true,
+          length: 8,
+          length2: 6,
           lineStyle: {
             color: mutedTextColor,
+            width: 1,
           },
         },
         emphasis: {
           label: {
-            color: chartTextColor,
+            color: "#212529",
+            backgroundColor: "rgba(255, 255, 255, 0.98)",
+            borderColor: "rgba(0, 0, 0, 0.25)",
+            borderWidth: 1,
+            borderRadius: 4,
+            padding: [2, 5],
+            fontWeight: 600,
           },
         },
       },
@@ -511,8 +536,8 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         },
         label: {
           show: true,
-          position: "insideRight",
-          color: valueLabelColor,
+          position: "right",
+          color: chartTextColor,
           formatter: (params: { value: number }) => formatMoney(params.value),
         },
       },
@@ -1356,7 +1381,7 @@ function renderModal(): string {
 }
 
 function render() {
-  const existingDataTools = rootEl.querySelector<HTMLDetailsElement>("details.details-card");
+  const existingDataTools = rootEl.querySelector<HTMLDetailsElement>('details[data-section="data-tools"]');
   if (existingDataTools) {
     dataToolsOpen = existingDataTools.open;
   }
@@ -1495,7 +1520,7 @@ function render() {
         </div>
         <div class="markets-widget-grid mb-2">
           <article class="markets-widget-card card border-0">
-            <div class="card-body p-2 p-md-3">
+            <div class="card-body p-0 p-md-1">
               <h3 class="h6 mb-2">Allocation</h3>
               <div class="markets-chart-frame">
                 <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
@@ -1504,7 +1529,7 @@ function render() {
             </div>
           </article>
           <article class="markets-widget-card card border-0">
-            <div class="card-body p-2 p-md-3">
+            <div class="card-body p-0 p-md-1">
               <h3 class="h6 mb-2">Top Markets by Value</h3>
               <div class="markets-chart-frame">
                 <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
@@ -1566,7 +1591,7 @@ function render() {
         </div>
       </details>
 
-      <details class="card shadow-sm details-card" ${dataToolsOpen ? "open" : ""}>
+      <details class="card shadow-sm details-card" data-section="data-tools" ${dataToolsOpen ? "open" : ""}>
         <summary class="card-header">Data Tools</summary>
         <div class="details-content card-body">
         <div class="tools-grid">

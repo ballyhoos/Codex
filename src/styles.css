@@ -105,17 +105,17 @@ body {
 }
 
 .markets-chart-frame {
-  min-height: 120px;
+  min-height: 150px;
   position: relative;
 }
 
 .markets-chart-canvas {
   width: 100%;
-  min-height: 120px;
+  min-height: 150px;
 }
 
 .markets-chart-empty {
-  min-height: 120px;
+  min-height: 150px;
   margin: 0;
   display: flex;
   align-items: center;
@@ -124,7 +124,7 @@ body {
   border: 1px dashed var(--bs-border-color);
   border-radius: 0.5rem;
   background: var(--bs-body-bg);
-  padding: 0.75rem;
+  padding: 0.2rem;
 }
 
 .growth-control-label {
@@ -383,7 +383,7 @@ body {
   .markets-chart-frame,
   .markets-chart-canvas,
   .markets-chart-empty {
-    min-height: 105px;
+    min-height: 130px;
   }
 }
 
