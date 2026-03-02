@@ -1,5 +1,6 @@
 import "./styles.css";
 import {
+  clearValuationSnapshots,
   clearAllData,
   getCategory,
   getInventoryRecord,
@@ -736,9 +737,9 @@ type GrowthReportRow = {
   growthPct: number | null;
 };
 
-function parseYyyyMmDdToMs(value: string): number | null {
+function parseYyyyMmDdToMs(value: string, endOfDay = false): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  return Date.parse(`${value}T00:00:00Z`);
+  return Date.parse(`${value}T${endOfDay ? "23:59:59" : "00:00:00"}Z`);
 }
 
 function normalizeScopeMarketIds(selectedMarketIds: Set<string>, descendants: Map<string, Set<string>>): string[] {
@@ -804,7 +805,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
   netGrowthTotalCents: number;
 } {
   const fromMs = parseYyyyMmDdToMs(state.reportDateFrom);
-  const toMs = parseYyyyMmDdToMs(state.reportDateTo);
+  const toMs = parseYyyyMmDdToMs(state.reportDateTo, true);
   if (fromMs == null || toMs == null || fromMs > toMs) {
     return {
       scopeMarketIds: [],
@@ -854,7 +855,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     const netGrowthCents =
       startValueCents == null || endValueCents == null
         ? null
-        : endValueCents - startValueCents - contributionsCents;
+        : endValueCents - startValueCents;
     const growthPct =
       netGrowthCents == null || startValueCents == null || startValueCents <= 0
         ? null
@@ -1149,12 +1150,75 @@ function render() {
             <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
           </div>
           <div class="d-flex align-items-center gap-2">
-            <button type="button" class="header-indicator-btn btn btn-outline-success btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
             <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
           </div>
         </div>
         ${toastState ? `<div class="alert alert-${toastState.tone} py-1 px-2 mt-2 mb-0 small" role="status">${escapeHtml(toastState.text)}</div>` : ""}
       </header>
+
+      <section class="card shadow-sm">
+        <div class="card-body">
+          <div class="section-head">
+            <h2 class="h5 mb-0">Growth Report</h2>
+            <div class="d-flex align-items-center gap-2">
+              <span class="small text-body-secondary">
+                Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
+              </span>
+              <button type="button" class="btn btn-outline-success btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
+            </div>
+          </div>
+          <div class="d-flex align-items-end gap-2 flex-wrap my-2">
+            <label class="form-label mb-0">From
+              <input class="form-control form-control-sm" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
+            </label>
+            <label class="form-label mb-0">To
+              <input class="form-control form-control-sm" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
+            </label>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
+          </div>
+          ${report.rows.length === 0 ? `
+            <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
+          ` : `
+            <div class="table-wrap table-responsive">
+              <table class="table table-striped table-sm align-middle mb-0 dataTable">
+                <thead>
+                  <tr>
+                    <th>Market</th>
+                    <th class="text-end">Start</th>
+                    <th class="text-end">End</th>
+                    <th class="text-end">Contributions</th>
+                    <th class="text-end">Growth</th>
+                    <th class="text-end">Growth %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${report.rows.map((row) => `
+                    <tr>
+                      <td>${escapeHtml(row.marketLabel)}</td>
+                      <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
+                      <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
+                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
+                      <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
+                      <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th>Total</th>
+                    <th class="text-end">${escapeHtml(formatMoney(report.startTotalCents))}</th>
+                    <th class="text-end">${escapeHtml(formatMoney(report.endTotalCents))}</th>
+                    <th class="text-end">${escapeHtml(formatMoney(report.contributionsTotalCents))}</th>
+                    <th class="text-end">${escapeHtml(formatMoney(report.netGrowthTotalCents))}</th>
+                    <th class="text-end">${escapeHtml(formatPercent(reportGrowthPct))}</th>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          `}
+        </div>
+      </section>
 
       <section class="card shadow-sm" data-filter-section-view-id="categoriesList">
         <div class="card-body">
@@ -1183,91 +1247,33 @@ function render() {
         </div>
       </section>
 
-      <section class="card shadow-sm" data-filter-section-view-id="inventoryTable">
-        <div class="card-body">
-        <div class="section-head">
-          <h2 class="h5 mb-0">Investments</h2>
-          <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
-            <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
-            <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
-          </div>
-        </div>
-        ${renderFilterChips("inventoryTable", "Investments")}
-        <div class="table-wrap table-responsive">
-          <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
-            <thead>
-              <tr>
-                ${inventoryColumns.map((c) => `<th class="${getColumnAlignClass(c)}">${escapeHtml(c.label)}</th>`).join("")}
-                <th class="actions-col" aria-label="Actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${inventoryRowsHtml}
-            </tbody>
-            ${renderTableFooter(inventoryColumns, filteredInventoryRecords)}
-          </table>
-        </div>
-        </div>
-      </section>
-
-      <section class="card shadow-sm">
-        <div class="card-body">
+      <details class="card shadow-sm details-card" data-filter-section-view-id="inventoryTable">
+        <summary class="card-header">Investments</summary>
+        <div class="details-content card-body">
           <div class="section-head">
-            <h2 class="h5 mb-0">Growth Report</h2>
-            <span class="small text-body-secondary">
-              Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
-            </span>
-          </div>
-          <div class="d-flex align-items-end gap-2 flex-wrap my-2">
-            <label class="form-label mb-0">From
-              <input class="form-control form-control-sm" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
-            </label>
-            <label class="form-label mb-0">To
-              <input class="form-control form-control-sm" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
-            </label>
-            <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
-          </div>
-          ${report.rows.length === 0 ? `
-            <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
-          ` : `
-            <div class="small mb-2">
-              <strong>Portfolio:</strong>
-              Start ${formatMoney(report.startTotalCents)}
-              • End ${formatMoney(report.endTotalCents)}
-              • Contributions ${formatMoney(report.contributionsTotalCents)}
-              • Net Growth ${formatMoney(report.netGrowthTotalCents)}
-              • ${formatPercent(reportGrowthPct)}
+            <h2 class="h5 mb-0 visually-hidden">Investments</h2>
+            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end w-100">
+              <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>
+              <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
             </div>
-            <div class="table-wrap table-responsive">
-              <table class="table table-striped table-sm align-middle mb-0">
-                <thead>
-                  <tr>
-                    <th>Market</th>
-                    <th class="text-end">Start</th>
-                    <th class="text-end">End</th>
-                    <th class="text-end">Contributions</th>
-                    <th class="text-end">Net Growth</th>
-                    <th class="text-end">Growth %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${report.rows.map((row) => `
-                    <tr>
-                      <td>${escapeHtml(row.marketLabel)}</td>
-                      <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
-                      <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
-                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
-                      <td class="text-end">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
-                      <td class="text-end">${escapeHtml(formatPercent(row.growthPct))}</td>
-                    </tr>
-                  `).join("")}
-                </tbody>
-              </table>
-            </div>
-          `}
+          </div>
+          ${renderFilterChips("inventoryTable", "Investments")}
+          <div class="table-wrap table-responsive">
+            <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  ${inventoryColumns.map((c) => `<th class="${getColumnAlignClass(c)}">${escapeHtml(c.label)}</th>`).join("")}
+                  <th class="actions-col" aria-label="Actions"></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${inventoryRowsHtml}
+              </tbody>
+              ${renderTableFooter(inventoryColumns, filteredInventoryRecords)}
+            </table>
+          </div>
         </div>
-      </section>
+      </details>
 
       <details class="card shadow-sm details-card" ${dataToolsOpen ? "open" : ""}>
         <summary class="card-header">Data Tools</summary>
@@ -1276,6 +1282,7 @@ function render() {
           <div>
             <div class="toolbar-row">
               <button type="button" class="btn btn-outline-primary btn-sm" data-action="download-json">Download JSON</button>
+              <button type="button" class="btn btn-outline-warning btn-sm" data-action="reset-snapshots">Reset Snapshots</button>
             </div>
             <div class="small text-body-secondary mb-2">
               Storage used (browser estimate): ${
@@ -1834,7 +1841,7 @@ rootEl.addEventListener("click", async (event) => {
     const from = fromInput.value;
     const to = toInput.value;
     const fromMs = parseYyyyMmDdToMs(from);
-    const toMs = parseYyyyMmDdToMs(to);
+    const toMs = parseYyyyMmDdToMs(to, true);
     if (fromMs == null || toMs == null || fromMs > toMs) {
       setToast({ tone: "warning", text: "Select a valid report date range." });
       return;
@@ -1893,6 +1900,16 @@ rootEl.addEventListener("click", async (event) => {
   }
   if (action === "replace-import") {
     await handleReplaceImport();
+    return;
+  }
+  if (action === "reset-snapshots") {
+    const confirmed = window.confirm(
+      "This will permanently delete all valuation snapshots used by Growth Report. This cannot be undone. Continue?",
+    );
+    if (!confirmed) return;
+    await clearValuationSnapshots();
+    await reloadData();
+    setToast({ tone: "warning", text: "All valuation snapshots have been reset." });
     return;
   }
   if (action === "wipe-all") {

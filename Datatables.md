@@ -98,6 +98,8 @@ Current placement order:
 - Do not wrap the DataTable in an extra rounded/bordered box frame
 - DataTables header background should be visually styled (light background)
 - Sticky headers are disabled for DataTables tables (sorting interaction compatibility)
+- If grand totals are required, place them in the table footer (`<tfoot>`) instead of above the table
+- Footer totals should use the same summary/footer styling treatment as other DataTable footers
 
 ## Column Alignment Conventions
 
@@ -233,6 +235,7 @@ Do not enable DataTables search unless product requirements are changed.
 8. Gray out archived rows
 9. Verify header sorting still works after CSS changes
 10. (Optional, current app pattern) Add section-hover `Esc` shortcut to remove the latest app-level filter crumb for that table/view
+11. If grand totals are needed, render them in a footer totals row (`<tfoot>`) using the shared footer style
 
 ## Where this is implemented in this repo
 

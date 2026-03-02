@@ -213,3 +213,10 @@ export async function clearAllData() {
   await tx.objectStore("valuationSnapshots").clear();
   await tx.done;
 }
+
+export async function clearValuationSnapshots() {
+  const db = await dbPromise;
+  const tx = db.transaction("valuationSnapshots", "readwrite");
+  await tx.objectStore("valuationSnapshots").clear();
+  await tx.done;
+}
