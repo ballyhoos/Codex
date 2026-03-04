@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && npm run build:single-html",
     "preview": "vite preview",
     "build:single-html": "node scripts/build-single-html.mjs",
-    "build:single-html:full": "npm run build && npm run build:single-html",
+    "build:single-html:full": "npm run build",
     "single": "npm run build:single-html",
     "single:full": "npm run build:single-html:full"
   },

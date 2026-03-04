@@ -10,7 +10,6 @@ import {
   listValuationSnapshots,
   putCategory,
   putInventoryRecord,
-  putValuationSnapshots,
   putSetting,
   replaceAllData,
 } from "./db";
@@ -78,6 +77,7 @@ let dataToolsOpen = false;
 let investmentsOpen = false;
 let expandedGrowthMarketIds = new Set<string>();
 let closeSnapshotCaptureStarted = false;
+let reportDateRangeInitialized = false;
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
 
@@ -118,6 +118,18 @@ const CURRENCY_SYMBOL_OPTIONS = [
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function getOldestActiveInvestmentDate(records: InventoryRecord[]): string | null {
+  let oldest: string | null = null;
+  for (const record of records) {
+    if (!record.active || record.archived) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(record.purchaseDate)) continue;
+    if (!oldest || record.purchaseDate < oldest) {
+      oldest = record.purchaseDate;
+    }
+  }
+  return oldest;
 }
 
 function isoDateDaysAgo(days: number): string {
@@ -439,22 +451,16 @@ function getGrowthSnapshotsLatestPerDay(snapshots: ValuationSnapshot[]): Valuati
   return [...latestByEntityDay.values()];
 }
 
-function buildGrowthTimelineData(scopeMarketIds: string[]): GrowthTimelineData {
-  const fromMs = parseYyyyMmDdToMs(state.reportDateFrom);
-  const toMs = parseYyyyMmDdToMs(state.reportDateTo, true);
-  if (fromMs == null || toMs == null || fromMs > toMs) {
-    return { labels: [], series: [], overallValues: [], showOverallComparison: false };
-  }
+function getManualSnapshotsForGrowth(): ValuationSnapshot[] {
+  return state.valuationSnapshots
+    .filter((snapshot) => snapshot.source === "manual")
+    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
+}
 
-  const growthSnapshots = getGrowthSnapshotsLatestPerDay(state.valuationSnapshots);
-  const scopeSet = new Set(scopeMarketIds);
-  const hasScopedFilter = state.filters.some((f) => f.viewId === "categoriesList");
-  const daySet = new Set<string>();
-  const marketSnapshotsById = new Map<string, ValuationSnapshot[]>();
-  const activeCategories = state.categories.filter((category) => category.active && !category.isArchived);
+function buildGrowthChildrenByParentId(): Map<string, string[]> {
   const childrenByParentId = new Map<string, string[]>();
-  for (const category of activeCategories) {
-    if (!category.parentId) continue;
+  for (const category of state.categories) {
+    if (category.isArchived || !category.active || !category.parentId) continue;
     const list = childrenByParentId.get(category.parentId) || [];
     list.push(category.id);
     childrenByParentId.set(category.parentId, list);
@@ -462,89 +468,91 @@ function buildGrowthTimelineData(scopeMarketIds: string[]): GrowthTimelineData {
   for (const list of childrenByParentId.values()) {
     list.sort();
   }
-  for (const snapshot of growthSnapshots) {
-    const capturedMs = Date.parse(snapshot.capturedAt);
-    if (!Number.isFinite(capturedMs) || capturedMs < fromMs || capturedMs > toMs) continue;
-    const day = getIsoDayFromTimestamp(snapshot.capturedAt);
-    if (!day) continue;
+  return childrenByParentId;
+}
+
+function buildManualMarketSnapshotsById(snapshots: ValuationSnapshot[]): Map<string, ValuationSnapshot[]> {
+  const byId = new Map<string, ValuationSnapshot[]>();
+  for (const snapshot of snapshots) {
     if (snapshot.scope !== "market" || !snapshot.marketId) continue;
-    daySet.add(day);
-    const marketSnaps = marketSnapshotsById.get(snapshot.marketId) || [];
-    marketSnaps.push(snapshot);
-    marketSnapshotsById.set(snapshot.marketId, marketSnaps);
+    const arr = byId.get(snapshot.marketId) || [];
+    arr.push(snapshot);
+    byId.set(snapshot.marketId, arr);
   }
-  for (const marketSnaps of marketSnapshotsById.values()) {
-    marketSnaps.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
+  for (const arr of byId.values()) {
+    arr.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
+  }
+  return byId;
+}
+
+function createGrowthEffectiveValueResolver(params: {
+  fromMs: number;
+  toMs: number;
+  childrenByParentId: Map<string, string[]>;
+  manualMarketSnapshotsById: Map<string, ValuationSnapshot[]>;
+}) {
+  const { fromMs, toMs, childrenByParentId, manualMarketSnapshotsById } = params;
+  const marketHasManualInRange = new Set<string>();
+  for (const [marketId, snapshots] of manualMarketSnapshotsById) {
+    if (snapshots.some((snapshot) => {
+      const ms = Date.parse(snapshot.capturedAt);
+      return Number.isFinite(ms) && ms >= fromMs && ms <= toMs;
+    })) {
+      marketHasManualInRange.add(marketId);
+    }
   }
 
-  const days = [...daySet].sort();
-  if (!days.length) return { labels: [], series: [], overallValues: [], showOverallComparison: hasScopedFilter };
+  const leafValueCache = new Map<string, number | null>();
+  const getLeafValueAtBoundary = (marketId: string, boundaryMs: number): number | null => {
+    const key = `leaf::${marketId}::${boundaryMs}`;
+    if (leafValueCache.has(key)) return leafValueCache.get(key) ?? null;
 
-  const labels = days.map((day) => {
-    const capturedDate = new Date(`${day}T00:00:00.000Z`);
-    return Number.isNaN(capturedDate.getTime()) ? day : capturedDate.toLocaleDateString();
-  });
+    const manualSnapshots = manualMarketSnapshotsById.get(marketId) || [];
+    const manualValue = pickBoundarySnapshotValueCents(manualSnapshots, boundaryMs);
+    if (manualValue != null) {
+      leafValueCache.set(key, manualValue);
+      return manualValue;
+    }
+    leafValueCache.set(key, null);
+    return null;
+  };
 
   const effectiveValueCache = new Map<string, number | null>();
   const getEffectiveValueAtBoundary = (marketId: string, boundaryMs: number): number | null => {
-    const cacheKey = `${marketId}::${boundaryMs}`;
-    if (effectiveValueCache.has(cacheKey)) {
-      return effectiveValueCache.get(cacheKey) ?? null;
-    }
+    const key = `effective::${marketId}::${boundaryMs}`;
+    if (effectiveValueCache.has(key)) return effectiveValueCache.get(key) ?? null;
+
     const childIds = childrenByParentId.get(marketId) || [];
-    if (childIds.length > 0) {
-      let childTotal = 0;
-      let hasChildValue = false;
-      for (const childId of childIds) {
-        const childValue = getEffectiveValueAtBoundary(childId, boundaryMs);
-        if (childValue == null) continue;
-        childTotal += childValue;
-        hasChildValue = true;
-      }
-      const childResult = hasChildValue ? childTotal : null;
-      effectiveValueCache.set(cacheKey, childResult);
-      return childResult;
+    if (!childIds.length) {
+      const leafValue = getLeafValueAtBoundary(marketId, boundaryMs);
+      effectiveValueCache.set(key, leafValue);
+      return leafValue;
     }
-    const directSnapshots = marketSnapshotsById.get(marketId) || [];
-    const directValue = pickBoundarySnapshotValueCents(directSnapshots, boundaryMs);
-    effectiveValueCache.set(cacheKey, directValue);
-    return directValue;
-  };
 
-  const series = scopeMarketIds
-    .map((marketId) => {
-      const market = getCategoryById(marketId);
-      if (!market) return null;
-      const label = market.pathNames.join(" / ");
-      const values = days.map((day) => {
-        const boundaryMs = parseYyyyMmDdToMs(day, true);
-        if (boundaryMs == null) return null;
-        return getEffectiveValueAtBoundary(marketId, boundaryMs);
-      });
-      const hasAnyValue = values.some((v) => typeof v === "number");
-      if (!hasAnyValue) return null;
-      return { marketId, label, values };
-    })
-    .filter((row): row is GrowthTimelineSeries => row != null);
-
-  const overallMarketIds = state.categories
-    .filter((category) => category.active && !category.isArchived && category.parentId == null)
-    .map((category) => category.id);
-  const overallValues = days.map((day) => {
-    const boundaryMs = parseYyyyMmDdToMs(day, true);
-    if (boundaryMs == null) return null;
+    const ownLeafValue = getLeafValueAtBoundary(marketId, boundaryMs);
     let total = 0;
-    let hasAny = false;
-    for (const marketId of overallMarketIds) {
-      const value = getEffectiveValueAtBoundary(marketId, boundaryMs);
-      if (value == null) continue;
-      total += value;
+    let hasAny = ownLeafValue != null;
+    if (ownLeafValue != null) total += ownLeafValue;
+    for (const childId of childIds) {
+      const childValue = getEffectiveValueAtBoundary(childId, boundaryMs);
+      if (childValue == null) continue;
+      total += childValue;
       hasAny = true;
     }
-    return hasAny ? total : null;
-  });
+    const value = hasAny ? total : null;
+    effectiveValueCache.set(key, value);
+    return value;
+  };
 
-  return { labels, series, overallValues, showOverallComparison: hasScopedFilter };
+  return {
+    marketHasManualInRange,
+    getEffectiveValueAtBoundary,
+  };
+}
+
+function buildGrowthTimelineData(scopeMarketIds: string[]): GrowthTimelineData {
+  void scopeMarketIds;
+  return { labels: [], series: [], overallValues: [], showOverallComparison: false };
 }
 
 function initGrowthTrendChart(timeline: GrowthTimelineData) {
@@ -925,7 +933,27 @@ async function reloadData() {
     storageUsageBytes = null;
     storageQuotaBytes = null;
   }
-  state = { ...state, inventoryRecords, categories: normalizedCategories, settings, valuationSnapshots, storageUsageBytes, storageQuotaBytes };
+  let nextReportDateFrom = state.reportDateFrom;
+  let nextReportDateTo = state.reportDateTo;
+  if (!reportDateRangeInitialized) {
+    const oldestActiveDate = getOldestActiveInvestmentDate(inventoryRecords);
+    if (oldestActiveDate) {
+      nextReportDateFrom = oldestActiveDate;
+    }
+    nextReportDateTo = new Date().toISOString().slice(0, 10);
+    reportDateRangeInitialized = true;
+  }
+  state = {
+    ...state,
+    inventoryRecords,
+    categories: normalizedCategories,
+    settings,
+    valuationSnapshots,
+    storageUsageBytes,
+    storageQuotaBytes,
+    reportDateFrom: nextReportDateFrom,
+    reportDateTo: nextReportDateTo,
+  };
   render();
 }
 
@@ -1069,13 +1097,15 @@ function buildCategoryDisplayTotalsMap(categoryTotals: Map<string, number>, cate
       return 0;
     }
     let total = 0;
-    if (category.evaluationMode === "snapshot") {
+    const children = childrenByParentId.get(category.id) || [];
+    if (children.length > 0) {
+      total = children.reduce((sum, child) => sum + computeCategoryDisplayTotal(child.id), 0);
+    } else if (category.evaluationMode === "snapshot") {
       total = categoryTotals.get(category.id) || 0;
     } else if (category.evaluationMode === "spot" && category.spotValueCents != null) {
       total = (categoryQty.get(category.id) || 0) * category.spotValueCents;
     } else {
-      const children = childrenByParentId.get(category.id) || [];
-      total = children.reduce((sum, child) => sum + computeCategoryDisplayTotal(child.id), 0);
+      total = categoryTotals.get(category.id) || 0;
     }
     computedTotalByCategoryId.set(categoryId, total);
     return total;
@@ -1208,124 +1238,14 @@ async function captureValuationSnapshot(options?: {
   silent?: boolean;
   skipReload?: boolean;
 }) {
-  const source = options?.source ?? "manual";
   const silent = options?.silent ?? false;
-  const skipReload = options?.skipReload ?? false;
-  const now = nowIso();
-  const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
-  const categoryDisplayTotals = buildCategoryDisplayTotalsMap(categoryTotals, categoryQty);
-  const markets = state.categories.filter((c) => c.active && !c.isArchived);
-  const categoryDescendantsMap = buildDescendantMap(state.categories);
-  const eligibleInventory = state.inventoryRecords.filter(isInventoryRecordCountableForCategoryMetrics);
-  const existingMarketSnapshotIds = new Set(
-    state.valuationSnapshots
-      .filter((snapshot) => snapshot.scope === "market" && !!snapshot.marketId)
-      .map((snapshot) => snapshot.marketId as string),
-  );
-  const hasPortfolioSnapshot = state.valuationSnapshots.some((snapshot) => snapshot.scope === "portfolio");
-  const snapshots: ValuationSnapshot[] = [];
-  let totalPortfolioValue = 0;
-  let skipped = 0;
-
-  for (const market of markets) {
-    let valueCents: number | null = null;
-    const subtreeIds = categoryDescendantsMap.get(market.id) || new Set([market.id]);
-    let qty = categoryQty.get(market.id) || 0;
-    const isFirstSnapshotForMarket = !existingMarketSnapshotIds.has(market.id);
-    let capturedAt = now;
-    let oldestPurchaseDate: string | null = null;
-    if (isFirstSnapshotForMarket) {
-      for (const record of eligibleInventory) {
-        if (!subtreeIds.has(record.categoryId)) continue;
-        const purchaseDate = record.purchaseDate;
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) continue;
-        if (!oldestPurchaseDate || purchaseDate < oldestPurchaseDate) {
-          oldestPurchaseDate = purchaseDate;
-        }
-      }
-      if (oldestPurchaseDate) {
-        capturedAt = `${oldestPurchaseDate}T00:00:00.000Z`;
-      }
-    }
-    if (market.evaluationMode === "spot") {
-      if (market.spotValueCents == null) {
-        skipped += 1;
-        continue;
-      }
-      if (isFirstSnapshotForMarket && oldestPurchaseDate) {
-        qty = eligibleInventory
-          .filter((record) => subtreeIds.has(record.categoryId) && /^\d{4}-\d{2}-\d{2}$/.test(record.purchaseDate) && record.purchaseDate <= oldestPurchaseDate)
-          .reduce((sum, record) => sum + record.quantity, 0);
-      }
-      valueCents = Math.round(qty * market.spotValueCents);
-    } else if (market.evaluationMode === "snapshot") {
-      if (isFirstSnapshotForMarket && oldestPurchaseDate) {
-        valueCents = eligibleInventory
-          .filter((record) => subtreeIds.has(record.categoryId) && /^\d{4}-\d{2}-\d{2}$/.test(record.purchaseDate) && record.purchaseDate <= oldestPurchaseDate)
-          .reduce((sum, record) => sum + record.totalPriceCents, 0);
-      } else {
-        valueCents = categoryTotals.get(market.id) || 0;
-      }
-    } else {
-      valueCents = categoryDisplayTotals.get(market.id) || 0;
-    }
-    totalPortfolioValue += valueCents;
-    snapshots.push({
-      id: crypto.randomUUID(),
-      capturedAt,
-      scope: "market",
-      marketId: market.id,
-      evaluationMode: market.evaluationMode,
-      valueCents,
-      quantity: market.evaluationMode === "spot" ? qty : undefined,
-      source,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
-
-  if (!snapshots.length) {
-    if (!silent) {
-      setToast({ tone: "warning", text: "No markets were eligible for snapshot capture." });
-    }
-    return;
-  }
-
-  const portfolioCapturedAt =
-    !hasPortfolioSnapshot && snapshots.length
-      ? snapshots
-        .map((snapshot) => snapshot.capturedAt)
-        .reduce((earliest, current) => (Date.parse(current) < Date.parse(earliest) ? current : earliest))
-      : now;
-  snapshots.push({
-    id: crypto.randomUUID(),
-    capturedAt: portfolioCapturedAt,
-    scope: "portfolio",
-    valueCents: totalPortfolioValue,
-    source,
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  await putValuationSnapshots(snapshots);
-  if (!skipReload) {
-    await reloadData();
-  }
   if (!silent) {
-    const skippedText = skipped > 0 ? ` (${skipped} skipped)` : "";
-    setToast({
-      tone: "success",
-      text: `Snapshot captured ${new Date(now).toLocaleString()} • ${formatMoney(totalPortfolioValue)}${skippedText}`,
-    });
+    setToast({ tone: "warning", text: "Snapshot capture is currently disabled while Growth logic is being redesigned." });
   }
 }
 
 function captureSnapshotOnClose() {
-  if (closeSnapshotCaptureStarted) return;
   closeSnapshotCaptureStarted = true;
-  void captureValuationSnapshot({ source: "derived", silent: true, skipReload: true }).catch(() => {
-    // Best-effort only during unload lifecycle.
-  });
 }
 
 function renderFilterChips(viewId: ViewId, title: string, rightSideHtml = "") {
@@ -1501,9 +1421,7 @@ function pickBoundarySnapshotValueCents(capturedAtAsc: ValuationSnapshot[], boun
     if (!Number.isFinite(snapMs)) continue;
     if (snapMs <= boundaryMs) {
       latestBeforeOrAt = snap;
-      continue;
     }
-    return latestBeforeOrAt ? latestBeforeOrAt.valueCents : snap.valueCents;
   }
   return latestBeforeOrAt ? latestBeforeOrAt.valueCents : null;
 }
@@ -1516,147 +1434,40 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
   endTotalCents: number;
   contributionsTotalCents: number;
   netGrowthTotalCents: number;
+  hasManualSnapshots: boolean;
 } {
-  const fromMs = parseYyyyMmDdToMs(state.reportDateFrom);
-  const toMs = parseYyyyMmDdToMs(state.reportDateTo, true);
-  if (fromMs == null || toMs == null || fromMs > toMs) {
-    return {
-      scopeMarketIds: [],
-      rows: [],
-      childRowsByParent: {},
-      startTotalCents: 0,
-      endTotalCents: 0,
-      contributionsTotalCents: 0,
-      netGrowthTotalCents: 0,
-    };
-  }
-
   const scopeMarketIds = getReportScopeMarketIds(categoryDescendantsMap);
-  const marketSnapshotsById = new Map<string, ValuationSnapshot[]>();
-  for (const snap of state.valuationSnapshots) {
-    if (snap.scope !== "market" || !snap.marketId) continue;
-    const arr = marketSnapshotsById.get(snap.marketId) || [];
-    arr.push(snap);
-    marketSnapshotsById.set(snap.marketId, arr);
-  }
-  for (const arr of marketSnapshotsById.values()) {
-    arr.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
-  }
-
-  const activeNonArchivedInventory = state.inventoryRecords.filter((r) => r.active && !r.archived);
+  const childrenByParentId = buildGrowthChildrenByParentId();
   const rows: GrowthReportRow[] = [];
   const childRowsByParent: Record<string, GrowthReportRow[]> = {};
-  const activeCategories = state.categories.filter((c) => !c.isArchived && c.active);
-  const childrenByParentId = new Map<string, CategoryNode[]>();
-  for (const category of activeCategories) {
-    if (!category.parentId) continue;
-    const list = childrenByParentId.get(category.parentId) || [];
-    list.push(category);
-    childrenByParentId.set(category.parentId, list);
-  }
-  for (const list of childrenByParentId.values()) {
-    list.sort((a, b) => a.name.localeCompare(b.name));
-  }
-  let startTotalCents = 0;
-  let endTotalCents = 0;
-  let contributionsTotalCents = 0;
-  let netGrowthTotalCents = 0;
-
-  const buildRowForMarket = (marketId: string): GrowthReportRow | null => {
+  const makePlaceholderRow = (marketId: string): GrowthReportRow | null => {
     const market = getCategoryById(marketId);
     if (!market) return null;
-    const subtree = categoryDescendantsMap.get(marketId) || new Set([marketId]);
-    const snaps = marketSnapshotsById.get(marketId) || [];
-    const startValueCents = pickBoundarySnapshotValueCents(snaps, fromMs);
-    const endValueCents = pickBoundarySnapshotValueCents(snaps, toMs);
-    let contributionsCents = 0;
-    for (const rec of activeNonArchivedInventory) {
-      if (!subtree.has(rec.categoryId)) continue;
-      const purchaseMs = parseYyyyMmDdToMs(rec.purchaseDate);
-      if (purchaseMs == null) continue;
-      if (purchaseMs > fromMs && purchaseMs <= toMs) {
-        contributionsCents += rec.totalPriceCents;
-      }
-    }
-    const netGrowthCents =
-      startValueCents == null || endValueCents == null
-        ? null
-        : endValueCents - startValueCents;
-    const growthPct =
-      netGrowthCents == null || startValueCents == null || startValueCents <= 0
-        ? null
-        : netGrowthCents / startValueCents;
     return {
       marketId,
       marketLabel: market.pathNames.join(" / "),
-      startValueCents,
-      endValueCents,
-      contributionsCents,
-      netGrowthCents,
-      growthPct,
+      startValueCents: null,
+      endValueCents: null,
+      contributionsCents: 0,
+      netGrowthCents: null,
+      growthPct: null,
     };
   };
 
-  const effectiveRowCache = new Map<string, GrowthReportRow | null>();
-  const buildEffectiveRowForMarket = (marketId: string): GrowthReportRow | null => {
-    if (effectiveRowCache.has(marketId)) {
-      return effectiveRowCache.get(marketId) || null;
-    }
-    const baseRow = buildRowForMarket(marketId);
-    if (!baseRow) {
-      effectiveRowCache.set(marketId, null);
-      return null;
-    }
-    const childRows = (childrenByParentId.get(marketId) || [])
-      .map((childCategory) => buildEffectiveRowForMarket(childCategory.id))
+  const visited = new Set<string>();
+  const buildChildRows = (marketId: string): GrowthReportRow[] => {
+    if (visited.has(marketId)) return [];
+    visited.add(marketId);
+    return (childrenByParentId.get(marketId) || [])
+      .map((childId) => makePlaceholderRow(childId))
       .filter((child): child is GrowthReportRow => child != null)
       .sort((a, b) => a.marketLabel.localeCompare(b.marketLabel));
-    childRowsByParent[marketId] = childRows;
-    if (!childRows.length) {
-      effectiveRowCache.set(marketId, baseRow);
-      return baseRow;
-    }
-    const sumChild = (pick: (child: GrowthReportRow) => number | null): number | null => {
-      let total = 0;
-      let hasAny = false;
-      for (const child of childRows) {
-        const value = pick(child);
-        if (value == null) continue;
-        total += value;
-        hasAny = true;
-      }
-      return hasAny ? total : null;
-    };
-    const childStart = sumChild((child) => child.startValueCents);
-    const childEnd = sumChild((child) => child.endValueCents);
-    const childContributions = childRows.reduce((sum, child) => sum + child.contributionsCents, 0);
-    const childNetGrowth =
-      childStart == null || childEnd == null
-        ? null
-        : childEnd - childStart;
-    const childGrowthPct =
-      childNetGrowth == null || childStart == null || childStart <= 0
-        ? null
-        : childNetGrowth / childStart;
-    const effectiveRow: GrowthReportRow = {
-      ...baseRow,
-      startValueCents: childStart,
-      endValueCents: childEnd,
-      contributionsCents: childContributions,
-      netGrowthCents: childNetGrowth,
-      growthPct: childGrowthPct,
-    };
-    effectiveRowCache.set(marketId, effectiveRow);
-    return effectiveRow;
   };
 
   for (const marketId of scopeMarketIds) {
-    const row = buildEffectiveRowForMarket(marketId);
+    const row = makePlaceholderRow(marketId);
     if (!row) continue;
-    if (row.startValueCents != null) startTotalCents += row.startValueCents;
-    if (row.endValueCents != null) endTotalCents += row.endValueCents;
-    contributionsTotalCents += row.contributionsCents;
-    if (row.netGrowthCents != null) netGrowthTotalCents += row.netGrowthCents;
+    childRowsByParent[marketId] = buildChildRows(marketId);
     rows.push(row);
   }
 
@@ -1664,10 +1475,11 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     scopeMarketIds,
     rows,
     childRowsByParent,
-    startTotalCents,
-    endTotalCents,
-    contributionsTotalCents,
-    netGrowthTotalCents,
+    startTotalCents: 0,
+    endTotalCents: 0,
+    contributionsTotalCents: 0,
+    netGrowthTotalCents: 0,
+    hasManualSnapshots: false,
   };
 }
 
@@ -2048,7 +1860,11 @@ function render() {
             </div>
           ` : ""}
           ${report.rows.length === 0 ? `
-            <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
+            <p class="mb-0 text-body-secondary">${
+              !report.hasManualSnapshots
+                ? "No manual snapshots yet for this scope/range. Capture Snapshot to begin Growth history."
+                : "No snapshot data for this scope/range yet."
+            }</p>
           ` : `
             <div class="table-wrap table-responsive">
               <table class="table table-striped table-sm align-middle mb-0 dataTable">
@@ -2120,7 +1936,6 @@ function render() {
         <div class="section-head markets-section-head">
           <h2 class="h5 mb-0">Markets</h2>
           <div class="d-flex align-items-center gap-2 justify-content-end markets-section-actions">
-            <button type="button" class="btn btn-warning capture-snapshot-btn btn-sm" data-action="capture-snapshot">Capture Snapshot</button>
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
