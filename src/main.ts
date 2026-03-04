@@ -1415,6 +1415,30 @@ function renderTableFooter<Row>(columns: ColumnDef<Row>[], rows: Row[]): string 
   return `<tfoot><tr>${cells.join("")}</tr></tfoot>`;
 }
 
+function renderCategoryTableFooter(columns: ColumnDef<CategoryNode>[], rows: CategoryNode[]): string {
+  const rowIds = new Set(rows.map((row) => row.id));
+  const topLevelVisibleRows = rows.filter((row) => !row.parentId || !rowIds.has(row.parentId));
+  const hierarchyAggregateKeys = new Set(["computedQty", "computedInvestmentCents", "computedTotalCents"]);
+  const cells = columns.map((col, index) => {
+    const sourceRows = hierarchyAggregateKeys.has(String(col.key)) ? topLevelVisibleRows : rows;
+    let sum = 0;
+    let hasNumeric = false;
+    for (const row of sourceRows) {
+      const raw = col.getValue(row);
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        sum += raw;
+        hasNumeric = true;
+      }
+    }
+    const text = hasNumeric
+      ? (String(col.key).toLowerCase().includes("cents") ? formatMoney(sum) : formatFooterNumber(sum))
+      : (index === 0 ? "Totals" : "");
+    return `<th class="${getColumnAlignClass(col)}">${escapeHtml(text)}</th>`;
+  });
+  cells.push(`<th class="actions-col" aria-hidden="true"></th>`);
+  return `<tfoot><tr>${cells.join("")}</tr></tfoot>`;
+}
+
 type GrowthReportRow = {
   marketId: string;
   marketLabel: string;
@@ -2136,7 +2160,7 @@ function render() {
             <tbody>
               ${categoriesRowsHtml}
             </tbody>
-            ${renderTableFooter(categoryColumns, filteredCategories)}
+            ${renderCategoryTableFooter(categoryColumns, filteredCategories)}
           </table>
         </div>
         </div>
