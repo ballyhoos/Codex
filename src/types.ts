@@ -6,6 +6,7 @@ export interface InventoryRecord {
   productName: string;
   quantity: number;
   totalPriceCents: number;
+  baselineValueCents?: number;
   unitPriceCents?: number;
   unitPriceSource: "entered" | "derived";
   categoryId: string;

@@ -189,6 +189,22 @@ body {
   min-width: 10rem;
 }
 
+.baseline-value-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: var(--bs-link-color);
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+  cursor: pointer;
+}
+
+.baseline-value-link:hover,
+.baseline-value-link:focus-visible {
+  color: var(--bs-link-hover-color);
+}
+
 .growth-expand-btn {
   border: 0;
   background: transparent;

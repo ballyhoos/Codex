@@ -78,6 +78,7 @@ let investmentsOpen = false;
 let expandedGrowthMarketIds = new Set<string>();
 let closeSnapshotCaptureStarted = false;
 let reportDateRangeInitialized = false;
+let baselineCopyStatusTimer: number | null = null;
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
 
@@ -1012,6 +1013,15 @@ function syncInventoryFormUnitPrice(form: HTMLFormElement) {
   unitEl.value = (Math.round(totalPriceCents / quantity) / 100).toFixed(2);
 }
 
+function syncInventoryFormBaselineValue(form: HTMLFormElement) {
+  const modeEl = form.querySelector<HTMLInputElement>('input[name="mode"]');
+  const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
+  const baselineEl = form.querySelector<HTMLInputElement>('input[name="baselineValue"]');
+  if (!modeEl || !totalEl || !baselineEl) return;
+  if (modeEl.value !== "create") return;
+  baselineEl.value = totalEl.value;
+}
+
 function syncInventoryFormFieldsByMarket(form: HTMLFormElement) {
   const categoryEl = form.querySelector<HTMLSelectElement>('select[name="categoryId"]');
   const qtyGroupEl = form.querySelector<HTMLElement>("[data-quantity-group]");
@@ -1139,6 +1149,15 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
       align: "right",
     },
     { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq", align: "right" },
+    {
+      key: "baselineValueCents",
+      label: "Baseline value",
+      getValue: (r) => r.baselineValueCents ?? "",
+      getDisplay: (r) => (r.baselineValueCents == null ? "" : formatMoney(r.baselineValueCents)),
+      filterable: true,
+      filterOp: "eq",
+      align: "right",
+    },
     { key: "purchaseDate", label: "Date", getValue: (r) => r.purchaseDate, getDisplay: (r) => r.purchaseDate, filterable: true, filterOp: "eq" },
     { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
   ];
@@ -1438,15 +1457,31 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
 } {
   const scopeMarketIds = getReportScopeMarketIds(categoryDescendantsMap);
   const childrenByParentId = buildGrowthChildrenByParentId();
+  const baselineTotalsByMarketId = new Map<string, number>();
+  for (const record of state.inventoryRecords) {
+    if (!record.active || record.archived) continue;
+    const baseline = record.baselineValueCents ?? 0;
+    if (!Number.isFinite(baseline)) continue;
+    const category = getCategoryById(record.categoryId);
+    if (!category) continue;
+    for (const marketId of category.pathIds) {
+      baselineTotalsByMarketId.set(
+        marketId,
+        (baselineTotalsByMarketId.get(marketId) || 0) + baseline,
+      );
+    }
+  }
   const rows: GrowthReportRow[] = [];
   const childRowsByParent: Record<string, GrowthReportRow[]> = {};
+  let startTotalCents = 0;
   const makePlaceholderRow = (marketId: string): GrowthReportRow | null => {
     const market = getCategoryById(marketId);
     if (!market) return null;
+    const startValueCents = baselineTotalsByMarketId.get(marketId) || 0;
     return {
       marketId,
       marketLabel: market.pathNames.join(" / "),
-      startValueCents: null,
+      startValueCents,
       endValueCents: null,
       contributionsCents: 0,
       netGrowthCents: null,
@@ -1468,6 +1503,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     const row = makePlaceholderRow(marketId);
     if (!row) continue;
     childRowsByParent[marketId] = buildChildRows(marketId);
+    startTotalCents += row.startValueCents || 0;
     rows.push(row);
   }
 
@@ -1475,7 +1511,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     scopeMarketIds,
     rows,
     childRowsByParent,
-    startTotalCents: 0,
+    startTotalCents,
     endTotalCents: 0,
     contributionsTotalCents: 0,
     netGrowthTotalCents: 0,
@@ -1679,6 +1715,7 @@ function renderModal(): string {
           <form id="inventory-form" class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="edit" />
             <input type="hidden" name="inventoryId" value="${escapeHtml(purchase.id)}" />
+            <input type="hidden" name="baselineValue" value="${escapeHtml(moneyInputFromCents(purchase.baselineValueCents))}" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${escapeHtml(purchase.purchaseDate)}" /></label>
             <label>Market
               <select class="form-select" name="categoryId" required>
@@ -1693,6 +1730,8 @@ function renderModal(): string {
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="totalPrice" required value="${escapeHtml(moneyInputFromCents(purchase.totalPriceCents))}" />
               </div>
+              <button type="button" class="baseline-value-link mt-1 small" data-action="copy-total-to-baseline">Set as baseline value</button>
+              <span class="baseline-value-status text-success small ms-2" data-role="baseline-copy-status" aria-live="polite"></span>
             </label>
             <label class="form-label mb-0">Per-item price (auto)
               <div class="input-group">
@@ -2060,6 +2099,7 @@ function render() {
   if (purchaseForm) {
     syncInventoryFormFieldsByMarket(purchaseForm);
     syncInventoryFormUnitPrice(purchaseForm);
+    syncInventoryFormBaselineValue(purchaseForm);
   }
   const categoryForm = rootEl.querySelector<HTMLFormElement>("#category-form");
   if (categoryForm) syncCategoryEvaluationFields(categoryForm);
@@ -2224,6 +2264,12 @@ async function handleInventorySubmit(form: HTMLFormElement) {
   const productName = String(fd.get("productName") || "").trim();
   const quantity = Number(fd.get("quantity"));
   const totalPriceCents = parseMoneyToCents(String(fd.get("totalPrice") || ""));
+  const baselineValueRaw = String(fd.get("baselineValue") || "").trim();
+  const parsedBaselineValueCents = baselineValueRaw === "" ? null : parseMoneyToCents(baselineValueRaw);
+  const baselineValueCents =
+    mode === "create"
+      ? totalPriceCents ?? undefined
+      : (parsedBaselineValueCents == null ? undefined : parsedBaselineValueCents);
   const categoryId = String(fd.get("categoryId") || "");
   const active = fd.get("active") === "on";
   const notes = String(fd.get("notes") || "").trim();
@@ -2238,6 +2284,14 @@ async function handleInventorySubmit(form: HTMLFormElement) {
   }
   if (totalPriceCents == null || totalPriceCents < 0) {
     alert("Total price is invalid.");
+    return;
+  }
+  if (mode !== "create" && parsedBaselineValueCents != null && parsedBaselineValueCents < 0) {
+    alert("Baseline value is invalid.");
+    return;
+  }
+  if (mode !== "create" && baselineValueRaw !== "" && parsedBaselineValueCents == null) {
+    alert("Baseline value is invalid.");
     return;
   }
   if (!getCategoryById(categoryId)) {
@@ -2257,6 +2311,7 @@ async function handleInventorySubmit(form: HTMLFormElement) {
     existing.productName = productName;
     existing.quantity = quantity;
     existing.totalPriceCents = totalPriceCents;
+    existing.baselineValueCents = baselineValueCents;
     existing.unitPriceCents = derivedUnitPriceCents;
     existing.unitPriceSource = "derived";
     existing.categoryId = categoryId;
@@ -2276,6 +2331,7 @@ async function handleInventorySubmit(form: HTMLFormElement) {
     productName,
     quantity,
     totalPriceCents,
+    baselineValueCents,
     unitPriceCents: derivedUnitPriceCents,
     unitPriceSource: "derived",
     categoryId,
@@ -2360,6 +2416,10 @@ function normalizeImportedInventoryRecord(raw: any): InventoryRecord {
   const totalPriceCents = Number(raw.totalPriceCents);
   if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Invalid quantity for purchase ${raw.id}`);
   if (!Number.isFinite(totalPriceCents)) throw new Error(`Invalid totalPriceCents for purchase ${raw.id}`);
+  const baseline =
+    raw.baselineValueCents == null || raw.baselineValueCents === ""
+      ? undefined
+      : Number(raw.baselineValueCents);
   const unit = raw.unitPriceCents == null || raw.unitPriceCents === "" ? undefined : Number(raw.unitPriceCents);
   return {
     id: String(raw.id),
@@ -2367,6 +2427,7 @@ function normalizeImportedInventoryRecord(raw: any): InventoryRecord {
     productName: String(raw.productName),
     quantity,
     totalPriceCents,
+    baselineValueCents: Number.isFinite(baseline) ? baseline : undefined,
     unitPriceCents: unit,
     unitPriceSource: raw.unitPriceSource === "entered" ? "entered" : "derived",
     categoryId: String(raw.categoryId),
@@ -2620,6 +2681,26 @@ rootEl.addEventListener("click", async (event) => {
     setState({ reportDateFrom: isoDateDaysAgo(365), reportDateTo: new Date().toISOString().slice(0, 10) });
     return;
   }
+  if (action === "copy-total-to-baseline") {
+    const form = actionEl.closest("form");
+    if (!(form instanceof HTMLFormElement) || form.id !== "inventory-form") return;
+    const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
+    const baselineEl = form.querySelector<HTMLInputElement>('input[name="baselineValue"]');
+    const statusEl = form.querySelector<HTMLElement>('[data-role="baseline-copy-status"]');
+    if (!totalEl || !baselineEl) return;
+    baselineEl.value = totalEl.value.trim();
+    if (statusEl) {
+      statusEl.innerHTML = '<i class="bi bi-check-circle-fill" aria-label="Baseline value set" title="Baseline value set"></i>';
+      if (baselineCopyStatusTimer != null) {
+        window.clearTimeout(baselineCopyStatusTimer);
+      }
+      baselineCopyStatusTimer = window.setTimeout(() => {
+        baselineCopyStatusTimer = null;
+        if (statusEl.isConnected) statusEl.textContent = "";
+      }, 1800);
+    }
+    return;
+  }
   if (action === "capture-snapshot") {
     try {
       await captureValuationSnapshot();
@@ -2753,6 +2834,7 @@ rootEl.addEventListener("input", (event) => {
     const form = target.closest("form");
     if (form instanceof HTMLFormElement && form.id === "inventory-form") {
       syncInventoryFormUnitPrice(form);
+      syncInventoryFormBaselineValue(form);
     }
   }
   if (target.id === "import-text") {
