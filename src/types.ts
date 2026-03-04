@@ -41,20 +41,6 @@ export interface AppSetting<T = unknown> {
   value: T;
 }
 
-export interface ValuationSnapshot {
-  id: string;
-  capturedAt: string;
-  scope: "portfolio" | "market";
-  marketId?: string;
-  evaluationMode?: "spot" | "snapshot";
-  valueCents: number;
-  quantity?: number;
-  source: "manual" | "derived";
-  note?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface ExportBundleV1 {
   schemaVersion: 1;
   exportedAt: string;
@@ -69,7 +55,6 @@ export interface ExportBundleV2 {
   settings: AppSetting[];
   categories: CategoryNode[];
   purchases: InventoryRecord[];
-  valuationSnapshots: ValuationSnapshot[];
 }
 
 export type ExportBundle = ExportBundleV1 | ExportBundleV2;
@@ -98,7 +83,6 @@ export interface AppState {
   inventoryRecords: InventoryRecord[];
   categories: CategoryNode[];
   settings: AppSetting[];
-  valuationSnapshots: ValuationSnapshot[];
   reportDateFrom: string;
   reportDateTo: string;
   filters: FilterClause[];

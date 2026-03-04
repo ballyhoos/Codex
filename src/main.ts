@@ -1,13 +1,11 @@
 import "./styles.css";
 import {
-  clearValuationSnapshots,
   clearAllData,
   getCategory,
   getInventoryRecord,
   listCategories,
   listInventoryRecords,
   listSettings,
-  listValuationSnapshots,
   putCategory,
   putInventoryRecord,
   putSetting,
@@ -24,7 +22,6 @@ import type {
   ExportBundleV2,
   FilterClause,
   InventoryRecord,
-  ValuationSnapshot,
   ViewId,
 } from "./types";
 
@@ -76,7 +73,6 @@ let hoveredFilterSectionViewId: ViewId | null = null;
 let dataToolsOpen = false;
 let investmentsOpen = false;
 let expandedGrowthMarketIds = new Set<string>();
-let closeSnapshotCaptureStarted = false;
 let reportDateRangeInitialized = false;
 let baselineCopyStatusTimer: number | null = null;
 let toastTimer: number | null = null;
@@ -86,7 +82,6 @@ let state: AppState = {
   inventoryRecords: [],
   categories: [],
   settings: [],
-  valuationSnapshots: [],
   reportDateFrom: isoDateDaysAgo(365),
   reportDateTo: new Date().toISOString().slice(0, 10),
   filters: [],
@@ -102,7 +97,6 @@ const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
 const DEFAULT_DARK_MODE = false;
 const DEFAULT_SHOW_MARKETS_GRAPHS = false;
-const DEFAULT_SHOW_GROWTH_GRAPH = false;
 const CURRENCY_SYMBOL_OPTIONS = [
   { value: "$", label: "Dollar ($)" },
   { value: "€", label: "Euro (€)" },
@@ -418,46 +412,6 @@ function attachMarketChartsResizeHandler() {
   });
 }
 
-type GrowthTimelineSeries = {
-  marketId: string;
-  label: string;
-  values: Array<number | null>;
-};
-
-type GrowthTimelineData = {
-  labels: string[];
-  series: GrowthTimelineSeries[];
-  overallValues: Array<number | null>;
-  showOverallComparison: boolean;
-};
-
-function getIsoDayFromTimestamp(value: string): string | null {
-  const ms = Date.parse(value);
-  if (!Number.isFinite(ms)) return null;
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-function getGrowthSnapshotsLatestPerDay(snapshots: ValuationSnapshot[]): ValuationSnapshot[] {
-  const latestByEntityDay = new Map<string, ValuationSnapshot>();
-  for (const snapshot of snapshots) {
-    const day = getIsoDayFromTimestamp(snapshot.capturedAt);
-    if (!day) continue;
-    const entityKey = snapshot.scope === "portfolio" ? "portfolio" : `market:${snapshot.marketId || ""}`;
-    const key = `${entityKey}::${day}`;
-    const current = latestByEntityDay.get(key);
-    if (!current || Date.parse(snapshot.capturedAt) > Date.parse(current.capturedAt)) {
-      latestByEntityDay.set(key, snapshot);
-    }
-  }
-  return [...latestByEntityDay.values()];
-}
-
-function getManualSnapshotsForGrowth(): ValuationSnapshot[] {
-  return state.valuationSnapshots
-    .filter((snapshot) => snapshot.source === "manual")
-    .sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
-}
-
 function buildGrowthChildrenByParentId(): Map<string, string[]> {
   const childrenByParentId = new Map<string, string[]>();
   for (const category of state.categories) {
@@ -470,227 +424,6 @@ function buildGrowthChildrenByParentId(): Map<string, string[]> {
     list.sort();
   }
   return childrenByParentId;
-}
-
-function buildManualMarketSnapshotsById(snapshots: ValuationSnapshot[]): Map<string, ValuationSnapshot[]> {
-  const byId = new Map<string, ValuationSnapshot[]>();
-  for (const snapshot of snapshots) {
-    if (snapshot.scope !== "market" || !snapshot.marketId) continue;
-    const arr = byId.get(snapshot.marketId) || [];
-    arr.push(snapshot);
-    byId.set(snapshot.marketId, arr);
-  }
-  for (const arr of byId.values()) {
-    arr.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt));
-  }
-  return byId;
-}
-
-function createGrowthEffectiveValueResolver(params: {
-  fromMs: number;
-  toMs: number;
-  childrenByParentId: Map<string, string[]>;
-  manualMarketSnapshotsById: Map<string, ValuationSnapshot[]>;
-}) {
-  const { fromMs, toMs, childrenByParentId, manualMarketSnapshotsById } = params;
-  const marketHasManualInRange = new Set<string>();
-  for (const [marketId, snapshots] of manualMarketSnapshotsById) {
-    if (snapshots.some((snapshot) => {
-      const ms = Date.parse(snapshot.capturedAt);
-      return Number.isFinite(ms) && ms >= fromMs && ms <= toMs;
-    })) {
-      marketHasManualInRange.add(marketId);
-    }
-  }
-
-  const leafValueCache = new Map<string, number | null>();
-  const getLeafValueAtBoundary = (marketId: string, boundaryMs: number): number | null => {
-    const key = `leaf::${marketId}::${boundaryMs}`;
-    if (leafValueCache.has(key)) return leafValueCache.get(key) ?? null;
-
-    const manualSnapshots = manualMarketSnapshotsById.get(marketId) || [];
-    const manualValue = pickBoundarySnapshotValueCents(manualSnapshots, boundaryMs);
-    if (manualValue != null) {
-      leafValueCache.set(key, manualValue);
-      return manualValue;
-    }
-    leafValueCache.set(key, null);
-    return null;
-  };
-
-  const effectiveValueCache = new Map<string, number | null>();
-  const getEffectiveValueAtBoundary = (marketId: string, boundaryMs: number): number | null => {
-    const key = `effective::${marketId}::${boundaryMs}`;
-    if (effectiveValueCache.has(key)) return effectiveValueCache.get(key) ?? null;
-
-    const childIds = childrenByParentId.get(marketId) || [];
-    if (!childIds.length) {
-      const leafValue = getLeafValueAtBoundary(marketId, boundaryMs);
-      effectiveValueCache.set(key, leafValue);
-      return leafValue;
-    }
-
-    const ownLeafValue = getLeafValueAtBoundary(marketId, boundaryMs);
-    let total = 0;
-    let hasAny = ownLeafValue != null;
-    if (ownLeafValue != null) total += ownLeafValue;
-    for (const childId of childIds) {
-      const childValue = getEffectiveValueAtBoundary(childId, boundaryMs);
-      if (childValue == null) continue;
-      total += childValue;
-      hasAny = true;
-    }
-    const value = hasAny ? total : null;
-    effectiveValueCache.set(key, value);
-    return value;
-  };
-
-  return {
-    marketHasManualInRange,
-    getEffectiveValueAtBoundary,
-  };
-}
-
-function buildGrowthTimelineData(scopeMarketIds: string[]): GrowthTimelineData {
-  void scopeMarketIds;
-  return { labels: [], series: [], overallValues: [], showOverallComparison: false };
-}
-
-function initGrowthTrendChart(timeline: GrowthTimelineData) {
-  const chartId = "growth-trend-chart";
-  const chartEl = rootEl.querySelector<HTMLElement>(`#${chartId}`);
-  if (!chartEl) return;
-  if (!window.echarts) {
-    showMarketChartMessage(chartId, "Chart unavailable: ECharts not loaded.");
-    return;
-  }
-  const hasOverallData = timeline.overallValues.some((value) => typeof value === "number");
-  const hasScopedSeries = timeline.series.length > 0;
-  if (!timeline.labels.length || (!hasOverallData && !hasScopedSeries)) {
-    showMarketChartMessage(chartId, "No snapshot trend data for this period yet.");
-    return;
-  }
-  showMarketChartCanvas(chartId);
-
-  const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
-  const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
-  const chartFontSize = isMobile ? 11 : 13;
-  const textColor = isDarkTheme ? "#e9ecef" : "#212529";
-  const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
-  const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#0dcaf0", "#198754", "#dc3545"];
-  const labelStep = timeline.labels.length > 12 ? Math.ceil(timeline.labels.length / 6) : 1;
-  growthTrendChart = window.echarts.init(chartEl);
-  growthTrendChart.setOption({
-    color: palette,
-    animationDuration: 450,
-    legend: {
-      type: "scroll",
-      top: 0,
-      textStyle: { color: textColor, fontSize: chartFontSize },
-    },
-    tooltip: {
-      trigger: "axis",
-      axisPointer: {
-        type: "line",
-        lineStyle: {
-          color: isDarkTheme ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.3)",
-          width: 1,
-        },
-      },
-      backgroundColor: isDarkTheme ? "rgba(16,18,22,0.94)" : "rgba(255,255,255,0.97)",
-      borderColor: isDarkTheme ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.12)",
-      textStyle: { color: textColor, fontSize: chartFontSize },
-      formatter: (params: Array<{ axisValueLabel?: string; seriesName?: string; value?: number | null }>) => {
-        if (!params.length) return "";
-        const rows = params
-          .filter((p) => typeof p.value === "number")
-          .map((p) => `${escapeHtml(p.seriesName || "")}: ${formatMoney(p.value as number)}`);
-        return [`<strong>${escapeHtml(params[0]?.axisValueLabel || "")}</strong>`, ...rows].join("<br/>");
-      },
-    },
-    grid: {
-      left: "3.5%",
-      right: "3.5%",
-      top: "16%",
-      bottom: "14%",
-      containLabel: true,
-    },
-    xAxis: {
-      type: "category",
-      data: timeline.labels,
-      boundaryGap: false,
-      axisLabel: {
-        color: mutedTextColor,
-        fontSize: chartFontSize,
-        inside: false,
-        margin: 10,
-        hideOverlap: true,
-        overflow: "truncate",
-        width: 72,
-        interval: (index: number) => index % labelStep === 0 || index === timeline.labels.length - 1,
-      },
-      axisTick: { show: false },
-      axisLine: {
-        lineStyle: { color: mutedTextColor },
-      },
-    },
-    yAxis: {
-      type: "value",
-      position: "left",
-      axisLabel: {
-        color: mutedTextColor,
-        margin: 6,
-        fontSize: chartFontSize,
-        formatter: (value: number) => formatMoneyCompact(value),
-      },
-      axisTick: { show: false },
-      splitLine: {
-        lineStyle: {
-          color: isDarkTheme ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
-        },
-      },
-    },
-    series: [
-      {
-        name: timeline.showOverallComparison ? "Overall (All Markets)" : "Overall",
-        type: "line",
-        color: isDarkTheme ? "#f8f9fa" : "#111827",
-        smooth: 0.28,
-        symbol: "circle",
-        showSymbol: true,
-        symbolSize: 9,
-        emphasis: {
-          focus: "series",
-          scale: false,
-        },
-        connectNulls: false,
-        data: timeline.overallValues,
-        lineStyle: {
-          width: 3.2,
-          color: isDarkTheme ? "#f8f9fa" : "#111827",
-          type: "dashed",
-        },
-        itemStyle: {
-          color: isDarkTheme ? "#f8f9fa" : "#111827",
-        },
-      },
-      ...timeline.series.map((series, idx) => ({
-        name: series.label,
-        type: "line",
-        smooth: 0.3,
-        symbol: "circle",
-        showSymbol: true,
-        symbolSize: 8,
-        emphasis: {
-          focus: "series",
-          scale: false,
-        },
-        connectNulls: false,
-        data: series.values,
-        lineStyle: { width: idx === 0 ? 2.6 : 2 },
-      })),
-    ],
-  });
 }
 
 function truncateLabel(value: string, maxLength = 26): string {
@@ -896,11 +629,10 @@ function wireDataTableHeaderSorting(tableEl: HTMLTableElement, dt: DataTableInst
 
 
 async function reloadData() {
-  const [inventoryRecords, categories, settings, valuationSnapshots] = await Promise.all([
+  const [inventoryRecords, categories, settings] = await Promise.all([
     listInventoryRecords(),
     listCategories(),
     listSettings(),
-    listValuationSnapshots(),
   ]);
   const normalizedCategories = recomputeCategoryPaths(categories).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   if (!settings.some((s) => s.key === "currencyCode")) {
@@ -918,10 +650,6 @@ async function reloadData() {
   if (!settings.some((s) => s.key === "showMarketsGraphs")) {
     await putSetting("showMarketsGraphs", DEFAULT_SHOW_MARKETS_GRAPHS);
     settings.push({ key: "showMarketsGraphs", value: DEFAULT_SHOW_MARKETS_GRAPHS });
-  }
-  if (!settings.some((s) => s.key === "showGrowthGraph")) {
-    await putSetting("showGrowthGraph", DEFAULT_SHOW_GROWTH_GRAPH);
-    settings.push({ key: "showGrowthGraph", value: DEFAULT_SHOW_GROWTH_GRAPH });
   }
   applyThemeFromSettings(settings);
   let storageUsageBytes: number | null = null;
@@ -949,7 +677,6 @@ async function reloadData() {
     inventoryRecords,
     categories: normalizedCategories,
     settings,
-    valuationSnapshots,
     storageUsageBytes,
     storageQuotaBytes,
     reportDateFrom: nextReportDateFrom,
@@ -1265,21 +992,6 @@ function getDerived() {
   };
 }
 
-async function captureValuationSnapshot(options?: {
-  source?: ValuationSnapshot["source"];
-  silent?: boolean;
-  skipReload?: boolean;
-}) {
-  const silent = options?.silent ?? false;
-  if (!silent) {
-    setToast({ tone: "warning", text: "Snapshot capture is currently disabled while Growth logic is being redesigned." });
-  }
-}
-
-function captureSnapshotOnClose() {
-  closeSnapshotCaptureStarted = true;
-}
-
 function renderFilterChips(viewId: ViewId, title: string, rightSideHtml = "") {
   const chips = state.filters.filter((f) => f.viewId === viewId);
   return `
@@ -1445,19 +1157,6 @@ function getReportScopeMarketIds(categoryDescendantsMap: Map<string, Set<string>
     .map((c) => c.id);
 }
 
-function pickBoundarySnapshotValueCents(capturedAtAsc: ValuationSnapshot[], boundaryMs: number): number | null {
-  if (!capturedAtAsc.length) return null;
-  let latestBeforeOrAt: ValuationSnapshot | null = null;
-  for (const snap of capturedAtAsc) {
-    const snapMs = Date.parse(snap.capturedAt);
-    if (!Number.isFinite(snapMs)) continue;
-    if (snapMs <= boundaryMs) {
-      latestBeforeOrAt = snap;
-    }
-  }
-  return latestBeforeOrAt ? latestBeforeOrAt.valueCents : null;
-}
-
 function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>): {
   scopeMarketIds: string[];
   rows: GrowthReportRow[];
@@ -1599,10 +1298,6 @@ function renderModal(): string {
                 <label class="form-check form-switch mb-0">
                   <input class="form-check-input" type="checkbox" name="darkMode" ${getSettingValue<boolean>("darkMode") ?? DEFAULT_DARK_MODE ? "checked" : ""} />
                   <span class="form-check-label">Dark mode</span>
-                </label>
-                <label class="form-check form-switch mb-0">
-                  <input class="form-check-input" type="checkbox" name="showGrowthGraph" ${getSettingValue<boolean>("showGrowthGraph") ?? DEFAULT_SHOW_GROWTH_GRAPH ? "checked" : ""} />
-                  <span class="form-check-label">Show Growth graph</span>
                 </label>
                 <label class="form-check form-switch mb-0">
                   <input class="form-check-input" type="checkbox" name="showMarketsGraphs" ${getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS ? "checked" : ""} />
@@ -1816,8 +1511,6 @@ function render() {
   const hasCategoryFilters = state.filters.some((filter) => filter.viewId === "categoriesList");
   const marketWidgetData = buildMarketWidgetData(filteredCategories, categoryColumns, hasCategoryFilters);
   const report = buildGrowthReportRows(categoryDescendantsMap);
-  const growthTimelineData = buildGrowthTimelineData(report.scopeMarketIds);
-  const showGrowthGraph = getSettingValue<boolean>("showGrowthGraph") ?? DEFAULT_SHOW_GROWTH_GRAPH;
   const showMarketsGraphs = getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS;
   const validExpandedGrowthMarketIds = new Set(
     [...expandedGrowthMarketIds].filter((id) => (report.childRowsByParent[id]?.length || 0) > 0),
@@ -1911,21 +1604,9 @@ function render() {
           <p class="small text-body-secondary mb-2">
             Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
           </p>
-          ${showGrowthGraph ? `
-            <div class="growth-widget-card card border-0 mb-2">
-              <div class="card-body p-1 p-md-2">
-                <div class="growth-chart-frame">
-                  <div id="growth-trend-chart" class="growth-chart-canvas" role="img" aria-label="Growth over time chart"></div>
-                  <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="growth-trend-chart" hidden></p>
-                </div>
-              </div>
-            </div>
-          ` : ""}
           ${report.rows.length === 0 ? `
             <p class="mb-0 text-body-secondary">${
-              !report.hasManualSnapshots
-                ? "No manual snapshots yet for this scope/range. Capture Snapshot to begin Growth history."
-                : "No snapshot data for this scope/range yet."
+              "No growth data available for this scope."
             }</p>
           ` : `
             <div class="table-wrap table-responsive">
@@ -2081,7 +1762,6 @@ function render() {
           <div>
             <div class="toolbar-row">
               <button type="button" class="btn btn-outline-primary btn-sm" data-action="download-json">Download JSON</button>
-              <button type="button" class="btn btn-outline-warning btn-sm" data-action="reset-snapshots">Reset Snapshots</button>
             </div>
             <div class="small text-body-secondary mb-2">
               Storage used (browser estimate): ${
@@ -2128,7 +1808,6 @@ function render() {
   if (categoryForm) syncCategoryEvaluationFields(categoryForm);
   syncModalFocus();
   initMarketCharts(marketWidgetData);
-  initGrowthTrendChart(growthTimelineData);
   initDataTables();
   window.scrollTo(prevScrollX, prevScrollY);
 }
@@ -2155,7 +1834,6 @@ function buildExportBundle(): ExportBundleV2 {
     settings: state.settings,
     categories: state.categories,
     purchases: state.inventoryRecords,
-    valuationSnapshots: state.valuationSnapshots,
   };
 }
 
@@ -2178,7 +1856,6 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
   const darkMode = fd.get("darkMode") === "on";
-  const showGrowthGraph = fd.get("showGrowthGraph") === "on";
   const showMarketsGraphs = fd.get("showMarketsGraphs") === "on";
   if (!/^[A-Z]{3}$/.test(currencyCode)) {
     alert("Currency code must be a 3-letter code like USD.");
@@ -2191,7 +1868,6 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
   await putSetting("darkMode", darkMode);
-  await putSetting("showGrowthGraph", showGrowthGraph);
   await putSetting("showMarketsGraphs", showMarketsGraphs);
   closeModal();
   await reloadData();
@@ -2463,30 +2139,6 @@ function normalizeImportedInventoryRecord(raw: any): InventoryRecord {
   };
 }
 
-function normalizeImportedValuationSnapshot(raw: any): ValuationSnapshot {
-  const now = nowIso();
-  const scope = raw.scope === "portfolio" || raw.scope === "market" ? raw.scope : "market";
-  const source = raw.source === "derived" ? "derived" : "manual";
-  const evaluationMode = raw.evaluationMode === "spot" || raw.evaluationMode === "snapshot" ? raw.evaluationMode : undefined;
-  const valueCents = Number(raw.valueCents);
-  if (!Number.isFinite(valueCents)) {
-    throw new Error(`Invalid valuation snapshot valueCents for ${raw.id ?? "(unknown id)"}`);
-  }
-  return {
-    id: String(raw.id ?? crypto.randomUUID()),
-    capturedAt: raw.capturedAt ? String(raw.capturedAt) : now,
-    scope,
-    marketId: scope === "market" ? String(raw.marketId ?? "") || undefined : undefined,
-    evaluationMode,
-    valueCents,
-    quantity: raw.quantity == null || raw.quantity === "" ? undefined : Number(raw.quantity),
-    source,
-    note: raw.note ? String(raw.note) : undefined,
-    createdAt: raw.createdAt ? String(raw.createdAt) : now,
-    updatedAt: raw.updatedAt ? String(raw.updatedAt) : now,
-  };
-}
-
 async function handleReplaceImport() {
   const rawText = state.importText.trim();
   if (!rawText) {
@@ -2525,14 +2177,9 @@ async function handleReplaceImport() {
         { key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL },
         { key: "darkMode", value: DEFAULT_DARK_MODE },
       ];
-    const valuationSnapshots: ValuationSnapshot[] =
-      parsed.schemaVersion === 2 && Array.isArray(parsed.valuationSnapshots)
-        ? parsed.valuationSnapshots.map(normalizeImportedValuationSnapshot)
-        : [];
-
     const confirmed = window.confirm("Replace all existing data with imported data? This cannot be undone.");
     if (!confirmed) return;
-    await replaceAllData({ purchases: importedInventoryRecords, categories, settings, valuationSnapshots });
+    await replaceAllData({ purchases: importedInventoryRecords, categories, settings });
     setState({ importText: "" });
     await reloadData();
   } catch (err) {
@@ -2724,14 +2371,6 @@ rootEl.addEventListener("click", async (event) => {
     }
     return;
   }
-  if (action === "capture-snapshot") {
-    try {
-      await captureValuationSnapshot();
-    } catch {
-      setToast({ tone: "danger", text: "Failed to capture snapshot." });
-    }
-    return;
-  }
   if (action === "toggle-growth-children") {
     const marketId = actionEl.dataset.marketId;
     if (!marketId) return;
@@ -2782,16 +2421,6 @@ rootEl.addEventListener("click", async (event) => {
   }
   if (action === "replace-import") {
     await handleReplaceImport();
-    return;
-  }
-  if (action === "reset-snapshots") {
-    const confirmed = window.confirm(
-      "This will permanently delete all valuation snapshots used by Growth Report. This cannot be undone. Continue?",
-    );
-    if (!confirmed) return;
-    await clearValuationSnapshots();
-    await reloadData();
-    setToast({ tone: "warning", text: "All valuation snapshots have been reset." });
     return;
   }
   if (action === "wipe-all") {
@@ -2958,14 +2587,6 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     first.focus();
   }
-});
-
-window.addEventListener("pagehide", () => {
-  captureSnapshotOnClose();
-});
-
-window.addEventListener("beforeunload", () => {
-  captureSnapshotOnClose();
 });
 
 void reloadData();
