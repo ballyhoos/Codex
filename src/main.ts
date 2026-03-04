@@ -1028,9 +1028,9 @@ function syncInventoryFormFieldsByMarket(form: HTMLFormElement) {
   const qtyEl = form.querySelector<HTMLInputElement>('input[name="quantity"]');
   if (!categoryEl || !qtyGroupEl || !qtyEl) return;
   const selectedCategory = getCategoryById(categoryEl.value);
-  const isSnapshot = selectedCategory?.evaluationMode === "snapshot";
-  qtyGroupEl.hidden = isSnapshot;
-  if (isSnapshot) {
+  const isSpot = selectedCategory?.evaluationMode === "spot";
+  qtyGroupEl.hidden = !isSpot;
+  if (!isSpot) {
     if (!Number.isFinite(Number(qtyEl.value)) || Number(qtyEl.value) <= 0) {
       qtyEl.value = "1";
     }
@@ -1138,12 +1138,25 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
       filterable: true,
       filterOp: "inCategorySubtree",
     },
-    { key: "quantity", label: "Qty", getValue: (r) => r.quantity, getDisplay: (r) => String(r.quantity), filterable: true, filterOp: "eq" },
+    {
+      key: "quantity",
+      label: "Qty",
+      getValue: (r) => (getCategoryById(r.categoryId)?.evaluationMode === "spot" ? r.quantity : ""),
+      getDisplay: (r) => (getCategoryById(r.categoryId)?.evaluationMode === "spot" ? String(r.quantity) : "-"),
+      filterable: true,
+      filterOp: "eq",
+    },
     {
       key: "unitPriceCents",
       label: "Unit",
-      getValue: (r) => r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity),
-      getDisplay: (r) => formatMoney(r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity)),
+      getValue: (r) =>
+        getCategoryById(r.categoryId)?.evaluationMode === "spot"
+          ? (r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity))
+          : "",
+      getDisplay: (r) =>
+        getCategoryById(r.categoryId)?.evaluationMode === "spot"
+          ? formatMoney(r.unitPriceCents ?? Math.round(r.totalPriceCents / r.quantity))
+          : "-",
       filterable: true,
       filterOp: "eq",
       align: "right",
@@ -1457,9 +1470,12 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
 } {
   const scopeMarketIds = getReportScopeMarketIds(categoryDescendantsMap);
   const childrenByParentId = buildGrowthChildrenByParentId();
+  const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
+  const computedTotalByCategoryId = buildCategoryDisplayTotalsMap(categoryTotals, categoryQty);
   const baselineTotalsByMarketId = new Map<string, number>();
+  const endTotalsByMarketId = new Map<string, number>();
   for (const record of state.inventoryRecords) {
-    if (!record.active || record.archived) continue;
+    if (!isInventoryRecordCountableForCategoryMetrics(record)) continue;
     const baseline = record.baselineValueCents ?? 0;
     if (!Number.isFinite(baseline)) continue;
     const category = getCategoryById(record.categoryId);
@@ -1469,23 +1485,39 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
         marketId,
         (baselineTotalsByMarketId.get(marketId) || 0) + baseline,
       );
+      endTotalsByMarketId.set(
+        marketId,
+        (endTotalsByMarketId.get(marketId) || 0) + record.totalPriceCents,
+      );
+    }
+  }
+  for (const market of state.categories) {
+    if (market.isArchived || !market.active) continue;
+    if (market.evaluationMode === "spot" && market.spotValueCents != null) {
+      endTotalsByMarketId.set(market.id, computedTotalByCategoryId.get(market.id) || 0);
     }
   }
   const rows: GrowthReportRow[] = [];
   const childRowsByParent: Record<string, GrowthReportRow[]> = {};
   let startTotalCents = 0;
+  let endTotalCents = 0;
+  let contributionsTotalCents = 0;
+  let netGrowthTotalCents = 0;
   const makePlaceholderRow = (marketId: string): GrowthReportRow | null => {
     const market = getCategoryById(marketId);
     if (!market) return null;
     const startValueCents = baselineTotalsByMarketId.get(marketId) || 0;
+    const endValueCents = endTotalsByMarketId.get(marketId) || 0;
+    const netGrowthCents = endValueCents - startValueCents;
+    const growthPct = startValueCents > 0 ? netGrowthCents / startValueCents : null;
     return {
       marketId,
       marketLabel: market.pathNames.join(" / "),
       startValueCents,
-      endValueCents: null,
-      contributionsCents: 0,
-      netGrowthCents: null,
-      growthPct: null,
+      endValueCents,
+      contributionsCents: endValueCents - startValueCents,
+      netGrowthCents,
+      growthPct,
     };
   };
 
@@ -1504,6 +1536,9 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     if (!row) continue;
     childRowsByParent[marketId] = buildChildRows(marketId);
     startTotalCents += row.startValueCents || 0;
+    endTotalCents += row.endValueCents || 0;
+    contributionsTotalCents += row.contributionsCents || 0;
+    netGrowthTotalCents += row.netGrowthCents || 0;
     rows.push(row);
   }
 
@@ -1512,9 +1547,9 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     rows,
     childRowsByParent,
     startTotalCents,
-    endTotalCents: 0,
-    contributionsTotalCents: 0,
-    netGrowthTotalCents: 0,
+    endTotalCents,
+    contributionsTotalCents,
+    netGrowthTotalCents,
     hasManualSnapshots: false,
   };
 }
@@ -1872,22 +1907,10 @@ function render() {
         <div class="card-body">
           <div class="section-head">
             <h2 class="h5 mb-0">Growth Report</h2>
-            <div class="d-flex align-items-center gap-2">
-              <span class="small text-body-secondary">
-                Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
-              </span>
-            </div>
           </div>
-          <div class="growth-report-controls d-flex align-items-center gap-2 flex-wrap my-2">
-            <label class="form-label mb-0 growth-control-label">From
-              <input class="form-control form-control-sm growth-control-input" type="date" name="reportDateFrom" value="${escapeHtml(state.reportDateFrom)}" />
-            </label>
-            <label class="form-label mb-0 growth-control-label">To
-              <input class="form-control form-control-sm growth-control-input" type="date" name="reportDateTo" value="${escapeHtml(state.reportDateTo)}" />
-            </label>
-            <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
-          </div>
+          <p class="small text-body-secondary mb-2">
+            Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
+          </p>
           ${showGrowthGraph ? `
             <div class="growth-widget-card card border-0 mb-2">
               <div class="card-body p-1 p-md-2">
