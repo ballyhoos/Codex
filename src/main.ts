@@ -100,6 +100,8 @@ let state: AppState = {
 const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
 const DEFAULT_DARK_MODE = false;
+const DEFAULT_SHOW_MARKETS_GRAPHS = false;
+const DEFAULT_SHOW_GROWTH_GRAPH = false;
 const CURRENCY_SYMBOL_OPTIONS = [
   { value: "$", label: "Dollar ($)" },
   { value: "€", label: "Euro (€)" },
@@ -904,6 +906,14 @@ async function reloadData() {
     await putSetting("darkMode", DEFAULT_DARK_MODE);
     settings.push({ key: "darkMode", value: DEFAULT_DARK_MODE });
   }
+  if (!settings.some((s) => s.key === "showMarketsGraphs")) {
+    await putSetting("showMarketsGraphs", DEFAULT_SHOW_MARKETS_GRAPHS);
+    settings.push({ key: "showMarketsGraphs", value: DEFAULT_SHOW_MARKETS_GRAPHS });
+  }
+  if (!settings.some((s) => s.key === "showGrowthGraph")) {
+    await putSetting("showGrowthGraph", DEFAULT_SHOW_GROWTH_GRAPH);
+    settings.push({ key: "showGrowthGraph", value: DEFAULT_SHOW_GROWTH_GRAPH });
+  }
   applyThemeFromSettings(settings);
   let storageUsageBytes: number | null = null;
   let storageQuotaBytes: number | null = null;
@@ -1683,6 +1693,14 @@ function renderModal(): string {
                   <input class="form-check-input" type="checkbox" name="darkMode" ${getSettingValue<boolean>("darkMode") ?? DEFAULT_DARK_MODE ? "checked" : ""} />
                   <span class="form-check-label">Dark mode</span>
                 </label>
+                <label class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" name="showGrowthGraph" ${getSettingValue<boolean>("showGrowthGraph") ?? DEFAULT_SHOW_GROWTH_GRAPH ? "checked" : ""} />
+                  <span class="form-check-label">Show Growth graph</span>
+                </label>
+                <label class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" name="showMarketsGraphs" ${getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS ? "checked" : ""} />
+                  <span class="form-check-label">Show Markets graphs</span>
+                </label>
               </div>
               <div class="modal-footer">
                 <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
@@ -1889,6 +1907,8 @@ function render() {
   const marketWidgetData = buildMarketWidgetData(filteredCategories, categoryColumns, hasCategoryFilters);
   const report = buildGrowthReportRows(categoryDescendantsMap);
   const growthTimelineData = buildGrowthTimelineData(report.scopeMarketIds);
+  const showGrowthGraph = getSettingValue<boolean>("showGrowthGraph") ?? DEFAULT_SHOW_GROWTH_GRAPH;
+  const showMarketsGraphs = getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS;
   const validExpandedGrowthMarketIds = new Set(
     [...expandedGrowthMarketIds].filter((id) => (report.childRowsByParent[id]?.length || 0) > 0),
   );
@@ -1993,14 +2013,16 @@ function render() {
             <button type="button" class="btn btn-sm btn-outline-primary" data-action="apply-report-range">Apply</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="reset-report-range">Reset</button>
           </div>
-          <div class="growth-widget-card card border-0 mb-2">
-            <div class="card-body p-1 p-md-2">
-              <div class="growth-chart-frame">
-                <div id="growth-trend-chart" class="growth-chart-canvas" role="img" aria-label="Growth over time chart"></div>
-                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="growth-trend-chart" hidden></p>
+          ${showGrowthGraph ? `
+            <div class="growth-widget-card card border-0 mb-2">
+              <div class="card-body p-1 p-md-2">
+                <div class="growth-chart-frame">
+                  <div id="growth-trend-chart" class="growth-chart-canvas" role="img" aria-label="Growth over time chart"></div>
+                  <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="growth-trend-chart" hidden></p>
+                </div>
               </div>
             </div>
-          </div>
+          ` : ""}
           ${report.rows.length === 0 ? `
             <p class="mb-0 text-body-secondary">No snapshot data for this scope/range yet.</p>
           ` : `
@@ -2078,24 +2100,26 @@ function render() {
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
-        <div class="markets-widget-grid mb-2">
-          <article class="markets-widget-card card border-0">
-            <div class="card-body p-0 p-md-1">
-              <div class="markets-chart-frame">
-                <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
-                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
+        ${showMarketsGraphs ? `
+          <div class="markets-widget-grid mb-2">
+            <article class="markets-widget-card card border-0">
+              <div class="card-body p-0 p-md-1">
+                <div class="markets-chart-frame">
+                  <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
+                  <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
+                </div>
               </div>
-            </div>
-          </article>
-          <article class="markets-widget-card card border-0">
-            <div class="card-body p-0 p-md-1">
-              <div class="markets-chart-frame">
-                <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
-                <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
+            </article>
+            <article class="markets-widget-card card border-0">
+              <div class="card-body p-0 p-md-1">
+                <div class="markets-chart-frame">
+                  <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
+                  <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
+                </div>
               </div>
-            </div>
-          </article>
-        </div>
+            </article>
+          </div>
+        ` : ""}
         ${renderFilterChips(
           "categoriesList",
           "Markets",
@@ -2122,8 +2146,8 @@ function render() {
         <summary class="card-header">Investments</summary>
         <div class="details-content card-body">
           <div class="section-head">
-            <h2 class="h5 mb-0 visually-hidden">Investments</h2>
-            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end w-100">
+            <h2 class="h5 mb-0">Investments</h2>
+            <div class="d-flex align-items-center gap-2 justify-content-end">
               <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
             </div>
           </div>
@@ -2252,6 +2276,8 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
   const darkMode = fd.get("darkMode") === "on";
+  const showGrowthGraph = fd.get("showGrowthGraph") === "on";
+  const showMarketsGraphs = fd.get("showMarketsGraphs") === "on";
   if (!/^[A-Z]{3}$/.test(currencyCode)) {
     alert("Currency code must be a 3-letter code like USD.");
     return;
@@ -2263,6 +2289,8 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
   await putSetting("darkMode", darkMode);
+  await putSetting("showGrowthGraph", showGrowthGraph);
+  await putSetting("showMarketsGraphs", showMarketsGraphs);
   closeModal();
   await reloadData();
 }
