@@ -63,7 +63,6 @@ let categoriesTableDt: DataTableInstanceLike | null = null;
 let inventoryTableDt: DataTableInstanceLike | null = null;
 let marketsDonutChart: EChartsInstanceLike | null = null;
 let marketsTopChart: EChartsInstanceLike | null = null;
-let growthTrendChart: EChartsInstanceLike | null = null;
 let marketChartsResizeHandlerAttached = false;
 let marketChartsResizeTimer: number | null = null;
 let dataTablesLoadHookAttached = false;
@@ -390,10 +389,8 @@ function showMarketChartCanvas(chartId: string) {
 function disposeMarketCharts() {
   marketsDonutChart?.dispose();
   marketsTopChart?.dispose();
-  growthTrendChart?.dispose();
   marketsDonutChart = null;
   marketsTopChart = null;
-  growthTrendChart = null;
 }
 
 function attachMarketChartsResizeHandler() {
@@ -407,7 +404,6 @@ function attachMarketChartsResizeHandler() {
       marketChartsResizeTimer = null;
       marketsDonutChart?.resize();
       marketsTopChart?.resize();
-      growthTrendChart?.resize();
     }, 120);
   });
 }
@@ -744,18 +740,28 @@ function syncInventoryFormBaselineValue(form: HTMLFormElement) {
   const modeEl = form.querySelector<HTMLInputElement>('input[name="mode"]');
   const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
   const baselineEl = form.querySelector<HTMLInputElement>('input[name="baselineValue"]');
+  const baselineDisplayEl = form.querySelector<HTMLInputElement>('input[name="baselineValueDisplay"]');
   if (!modeEl || !totalEl || !baselineEl) return;
-  if (modeEl.value !== "create") return;
-  baselineEl.value = totalEl.value;
+  if (modeEl.value === "create") {
+    baselineEl.value = totalEl.value;
+  }
+  if (baselineDisplayEl) {
+    baselineDisplayEl.value = baselineEl.value || totalEl.value;
+  }
 }
 
 function syncInventoryFormFieldsByMarket(form: HTMLFormElement) {
   const categoryEl = form.querySelector<HTMLSelectElement>('select[name="categoryId"]');
   const qtyGroupEl = form.querySelector<HTMLElement>("[data-quantity-group]");
   const qtyEl = form.querySelector<HTMLInputElement>('input[name="quantity"]');
+  const baselineGroupEl = form.querySelector<HTMLElement>("[data-baseline-group]");
+  const baselineDisplayEl = form.querySelector<HTMLInputElement>('input[name="baselineValueDisplay"]');
+  const baselineHiddenEl = form.querySelector<HTMLInputElement>('input[name="baselineValue"]');
+  const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
   if (!categoryEl || !qtyGroupEl || !qtyEl) return;
   const selectedCategory = getCategoryById(categoryEl.value);
   const isSpot = selectedCategory?.evaluationMode === "spot";
+  const isSnapshot = selectedCategory?.evaluationMode === "snapshot";
   qtyGroupEl.hidden = !isSpot;
   if (!isSpot) {
     if (!Number.isFinite(Number(qtyEl.value)) || Number(qtyEl.value) <= 0) {
@@ -764,6 +770,13 @@ function syncInventoryFormFieldsByMarket(form: HTMLFormElement) {
     qtyEl.readOnly = true;
   } else {
     qtyEl.readOnly = false;
+  }
+  if (baselineGroupEl) {
+    baselineGroupEl.hidden = !isSnapshot;
+  }
+  if (isSnapshot && baselineDisplayEl) {
+    baselineDisplayEl.disabled = true;
+    baselineDisplayEl.value = baselineHiddenEl?.value || totalEl?.value || "";
   }
 }
 
@@ -889,15 +902,6 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
       align: "right",
     },
     { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq", align: "right" },
-    {
-      key: "baselineValueCents",
-      label: "Baseline value",
-      getValue: (r) => r.baselineValueCents ?? "",
-      getDisplay: (r) => (r.baselineValueCents == null ? "" : formatMoney(r.baselineValueCents)),
-      filterable: true,
-      filterOp: "eq",
-      align: "right",
-    },
     { key: "purchaseDate", label: "Date", getValue: (r) => r.purchaseDate, getDisplay: (r) => r.purchaseDate, filterable: true, filterOp: "eq" },
     { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
   ];
@@ -1172,7 +1176,6 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
   const { categoryTotals, categoryQty } = buildCategoryMetricMaps();
   const computedTotalByCategoryId = buildCategoryDisplayTotalsMap(categoryTotals, categoryQty);
   const baselineTotalsByMarketId = new Map<string, number>();
-  const endTotalsByMarketId = new Map<string, number>();
   for (const record of state.inventoryRecords) {
     if (!isInventoryRecordCountableForCategoryMetrics(record)) continue;
     const baseline = record.baselineValueCents ?? 0;
@@ -1184,16 +1187,6 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
         marketId,
         (baselineTotalsByMarketId.get(marketId) || 0) + baseline,
       );
-      endTotalsByMarketId.set(
-        marketId,
-        (endTotalsByMarketId.get(marketId) || 0) + record.totalPriceCents,
-      );
-    }
-  }
-  for (const market of state.categories) {
-    if (market.isArchived || !market.active) continue;
-    if (market.evaluationMode === "spot" && market.spotValueCents != null) {
-      endTotalsByMarketId.set(market.id, computedTotalByCategoryId.get(market.id) || 0);
     }
   }
   const rows: GrowthReportRow[] = [];
@@ -1206,7 +1199,7 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     const market = getCategoryById(marketId);
     if (!market) return null;
     const startValueCents = baselineTotalsByMarketId.get(marketId) || 0;
-    const endValueCents = endTotalsByMarketId.get(marketId) || 0;
+    const endValueCents = computedTotalByCategoryId.get(marketId) || 0;
     const netGrowthCents = endValueCents - startValueCents;
     const growthPct = startValueCents > 0 ? netGrowthCents / startValueCents : null;
     return {
@@ -1240,6 +1233,10 @@ function buildGrowthReportRows(categoryDescendantsMap: Map<string, Set<string>>)
     netGrowthTotalCents += row.netGrowthCents || 0;
     rows.push(row);
   }
+
+  // Keep footer totals locked to the same Start/End basis used by rows.
+  contributionsTotalCents = endTotalCents - startTotalCents;
+  netGrowthTotalCents = endTotalCents - startTotalCents;
 
   return {
     scopeMarketIds,
@@ -1396,6 +1393,7 @@ function renderModal(): string {
           <form id="inventory-form" class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="create" />
             <input type="hidden" name="inventoryId" value="" />
+            <input type="hidden" name="baselineValue" value="" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
             <label>Market
               <select class="form-select" name="categoryId" required>
@@ -1415,6 +1413,12 @@ function renderModal(): string {
               <div class="input-group">
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="unitPrice" value="" disabled />
+              </div>
+            </label>
+            <label class="form-label mb-0" data-baseline-group hidden>Baseline value
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" name="baselineValueDisplay" value="" disabled />
               </div>
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" checked /> <span class="form-check-label">Active (counts in totals)</span></label>
@@ -1462,6 +1466,12 @@ function renderModal(): string {
               </div>
               <button type="button" class="baseline-value-link mt-1 small" data-action="copy-total-to-baseline">Set as baseline value</button>
               <span class="baseline-value-status text-success small ms-2" data-role="baseline-copy-status" aria-live="polite"></span>
+            </label>
+            <label class="form-label mb-0" data-baseline-group hidden>Baseline value
+              <div class="input-group">
+                <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
+                <input class="form-control" type="number" name="baselineValueDisplay" value="${escapeHtml(moneyInputFromCents(purchase.baselineValueCents ?? purchase.totalPriceCents))}" disabled />
+              </div>
             </label>
             <label class="form-label mb-0">Per-item price (auto)
               <div class="input-group">
@@ -1616,7 +1626,6 @@ function render() {
                     <th>Market</th>
                     <th class="text-end">Start</th>
                     <th class="text-end">End</th>
-                    <th class="text-end">Contributions</th>
                     <th class="text-end">Growth</th>
                     <th class="text-end">Growth %</th>
                   </tr>
@@ -1637,7 +1646,6 @@ function render() {
                         </td>
                       <td class="text-end">${row.startValueCents == null ? "—" : escapeHtml(formatMoney(row.startValueCents))}</td>
                       <td class="text-end">${row.endValueCents == null ? "—" : escapeHtml(formatMoney(row.endValueCents))}</td>
-                      <td class="text-end">${escapeHtml(formatMoney(row.contributionsCents))}</td>
                       <td class="text-end ${getGrowthToneClass(row.netGrowthCents)}">${row.netGrowthCents == null ? "—" : escapeHtml(formatMoney(row.netGrowthCents))}</td>
                       <td class="text-end ${getGrowthToneClass(row.growthPct)}">${escapeHtml(formatPercent(row.growthPct))}</td>
                       </tr>
@@ -1648,7 +1656,6 @@ function render() {
                               <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span>↳ ${escapeHtml(child.marketLabel)}</td>
                               <td class="text-end">${child.startValueCents == null ? "—" : escapeHtml(formatMoney(child.startValueCents))}</td>
                               <td class="text-end">${child.endValueCents == null ? "—" : escapeHtml(formatMoney(child.endValueCents))}</td>
-                              <td class="text-end">${escapeHtml(formatMoney(child.contributionsCents))}</td>
                               <td class="text-end ${getGrowthToneClass(child.netGrowthCents)}">${child.netGrowthCents == null ? "—" : escapeHtml(formatMoney(child.netGrowthCents))}</td>
                               <td class="text-end ${getGrowthToneClass(child.growthPct)}">${escapeHtml(formatPercent(child.growthPct))}</td>
                             </tr>
@@ -1663,7 +1670,6 @@ function render() {
                     <th>Total</th>
                     <th class="text-end">${escapeHtml(formatMoney(report.startTotalCents))}</th>
                     <th class="text-end">${escapeHtml(formatMoney(report.endTotalCents))}</th>
-                    <th class="text-end">${escapeHtml(formatMoney(report.contributionsTotalCents))}</th>
                     <th class="text-end ${getGrowthToneClass(report.netGrowthTotalCents)}">${escapeHtml(formatMoney(report.netGrowthTotalCents))}</th>
                     <th class="text-end ${getGrowthToneClass(reportGrowthPct)}">${escapeHtml(formatPercent(reportGrowthPct))}</th>
                   </tr>
@@ -2356,9 +2362,13 @@ rootEl.addEventListener("click", async (event) => {
     if (!(form instanceof HTMLFormElement) || form.id !== "inventory-form") return;
     const totalEl = form.querySelector<HTMLInputElement>('input[name="totalPrice"]');
     const baselineEl = form.querySelector<HTMLInputElement>('input[name="baselineValue"]');
+    const baselineDisplayEl = form.querySelector<HTMLInputElement>('input[name="baselineValueDisplay"]');
     const statusEl = form.querySelector<HTMLElement>('[data-role="baseline-copy-status"]');
     if (!totalEl || !baselineEl) return;
     baselineEl.value = totalEl.value.trim();
+    if (baselineDisplayEl) {
+      baselineDisplayEl.value = baselineEl.value;
+    }
     if (statusEl) {
       statusEl.innerHTML = '<i class="bi bi-check-circle-fill" aria-label="Baseline value set" title="Baseline value set"></i>';
       if (baselineCopyStatusTimer != null) {
