@@ -2426,7 +2426,7 @@ rootEl.addEventListener("click", async (event) => {
     return;
   }
   if (action === "download-json") {
-    downloadTextFile(`investment-tracker-${new Date().toISOString().slice(0, 10)}.json`, buildExportJsonText(), "application/json");
+    downloadTextFile(`investments-app-${new Date().toISOString().slice(0, 10)}.json`, buildExportJsonText(), "application/json");
     return;
   }
   if (action === "replace-import") {

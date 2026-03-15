@@ -18,8 +18,16 @@ if (!jsTagMatch || !cssTagMatch) {
   throw new Error("Could not find built JS/CSS asset tags in dist/index.html.");
 }
 
-const jsAssetPath = path.join(distDir, jsTagMatch[1].replace(/^\//, ""));
-const cssAssetPath = path.join(distDir, cssTagMatch[1].replace(/^\//, ""));
+function resolveBuiltAssetPath(assetRef) {
+  const normalized = assetRef.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "");
+  const withoutBase = normalized.startsWith("investments/")
+    ? normalized.slice("investments/".length)
+    : normalized;
+  return path.join(distDir, withoutBase);
+}
+
+const jsAssetPath = resolveBuiltAssetPath(jsTagMatch[1]);
+const cssAssetPath = resolveBuiltAssetPath(cssTagMatch[1]);
 
 const js = fs.readFileSync(jsAssetPath, "utf8");
 const css = fs.readFileSync(cssAssetPath, "utf8");
