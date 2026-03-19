@@ -3,7 +3,9 @@ import path from "node:path";
 
 const distDir = path.resolve("dist");
 const distIndexPath = path.join(distDir, "index.html");
-const outputPath = path.join(distDir, "investments.app.html");
+const outputPathNoAnalytics = path.join(distDir, "investments.app.html");
+const outputPathWithAnalytics = path.join(distDir, "investments.analytics.app.html");
+const gaMeasurementId = process.env.GA_MEASUREMENT_ID || process.env.VITE_GA_MEASUREMENT_ID || "";
 
 if (!fs.existsSync(distIndexPath)) {
   throw new Error("dist/index.html not found. Run `npm run build` first.");
@@ -35,5 +37,27 @@ const css = fs.readFileSync(cssAssetPath, "utf8");
 html = html.replace(cssTagMatch[0], `<style>\n${css}\n</style>`);
 html = html.replace(jsTagMatch[0], `<script type="module">\n${js}\n</script>`);
 
-fs.writeFileSync(outputPath, html);
-console.log(`Wrote ${path.relative(process.cwd(), outputPath)}`);
+function withAnalyticsMarkup(baseHtml) {
+  if (!gaMeasurementId) {
+    const marker = "<!-- Analytics disabled: set GA_MEASUREMENT_ID or VITE_GA_MEASUREMENT_ID during build to enable -->";
+    return baseHtml.replace("</head>", `    ${marker}\n  </head>`);
+  }
+  const escapedId = gaMeasurementId.replace(/"/g, "");
+  const snippet = [
+    `    <script async src="https://www.googletagmanager.com/gtag/js?id=${escapedId}"></script>`,
+    "    <script>",
+    "      window.dataLayer = window.dataLayer || [];",
+    "      function gtag(){dataLayer.push(arguments);}",
+    "      gtag('js', new Date());",
+    `      gtag('config', '${escapedId}', { anonymize_ip: true });`,
+    "    </script>",
+  ].join("\n");
+  return baseHtml.replace("</head>", `${snippet}\n  </head>`);
+}
+
+fs.writeFileSync(outputPathNoAnalytics, html);
+console.log(`Wrote ${path.relative(process.cwd(), outputPathNoAnalytics)}`);
+
+const analyticsHtml = withAnalyticsMarkup(html);
+fs.writeFileSync(outputPathWithAnalytics, analyticsHtml);
+console.log(`Wrote ${path.relative(process.cwd(), outputPathWithAnalytics)}`);
