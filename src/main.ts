@@ -717,13 +717,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
       axisLabel: {
         color: mutedTextColor,
         fontSize: chartFontSize,
-        lineHeight: chartFontSize + 3,
-        formatter: (value: string) => {
-          const row = topRowsByLabel.get(value);
-          if (!row) return truncateLabel(value);
-          const changePrefix = row.changeCents > 0 ? "+" : "";
-          return `${truncateLabel(value)}\n(${changePrefix}${formatMoney(row.changeCents)})`;
-        },
+        formatter: (value: string) => truncateLabel(value),
       },
       axisTick: { show: false },
       axisLine: { show: false },
@@ -756,7 +750,13 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
           distance: 6,
           color: chartTextColor,
           fontSize: chartFontSize,
-          formatter: (params: { value: number }) => formatMoney(params.value),
+          formatter: (params: { dataIndex: number }) => {
+            const row = topRowsDisplay[params.dataIndex];
+            if (!row) return "";
+            if (row.changeCents === 0) return "";
+            const changePrefix = row.changeCents > 0 ? "+" : "";
+            return `${changePrefix}${formatMoney(row.changeCents)}`;
+          },
         },
       },
     ],
