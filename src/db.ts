@@ -129,6 +129,10 @@ export async function getInventoryRecord(id: string) {
   return (await dbPromise).get("inventory", id);
 }
 
+export async function deleteInventoryRecord(id: string) {
+  await (await dbPromise).delete("inventory", id);
+}
+
 export async function listCategories() {
   return (await dbPromise).getAll("categories");
 }

@@ -1,6 +1,7 @@
 import "./styles.css";
 import {
   clearAllData,
+  deleteInventoryRecord,
   getCategory,
   getInventoryRecord,
   listCategories,
@@ -189,13 +190,34 @@ const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
 };
 const DEFAULT_MARKETS_IMPORT_TEXT = JSON.stringify(DEFAULT_MARKETS_IMPORT_BUNDLE);
 
+function createDefaultActiveFilters(): FilterClause[] {
+  return [
+    {
+      id: crypto.randomUUID(),
+      viewId: "categoriesList",
+      field: "active",
+      op: "eq",
+      value: "true",
+      label: "Active: Yes",
+    },
+    {
+      id: crypto.randomUUID(),
+      viewId: "inventoryTable",
+      field: "active",
+      op: "eq",
+      value: "true",
+      label: "Active: Yes",
+    },
+  ];
+}
+
 let state: AppState = {
   inventoryRecords: [],
   categories: [],
   settings: [],
   reportDateFrom: isoDateDaysAgo(365),
   reportDateTo: new Date().toISOString().slice(0, 10),
-  filters: [],
+  filters: createDefaultActiveFilters(),
   showArchivedInventory: false,
   showArchivedCategories: false,
   exportText: "",
@@ -1022,7 +1044,7 @@ function buildInventoryColumns(): ColumnDef<InventoryRecord>[] {
     },
     { key: "totalPriceCents", label: "Total", getValue: (r) => r.totalPriceCents, getDisplay: (r) => formatMoney(r.totalPriceCents), filterable: true, filterOp: "eq", align: "right" },
     { key: "purchaseDate", label: "Date", getValue: (r) => r.purchaseDate, getDisplay: (r) => r.purchaseDate, filterable: true, filterOp: "eq" },
-    { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
+    { key: "active", label: "Active", getValue: (r) => r.active, getDisplay: (r) => (r.active ? "Yes" : "No"), filterable: true, filterOp: "eq" },
   ];
 }
 
@@ -1099,7 +1121,7 @@ function getDerived() {
       filterOp: "eq",
       align: "right",
     },
-    { key: "active", label: "Active", getValue: (r) => r.active && !r.isArchived, getDisplay: (r) => (r.active && !r.isArchived ? "Active" : "Inactive"), filterable: true, filterOp: "eq" },
+    { key: "active", label: "Active", getValue: (r) => r.active && !r.isArchived, getDisplay: (r) => (r.active && !r.isArchived ? "Yes" : "No"), filterable: true, filterOp: "eq" },
   ];
 
   const filteredCategories = applyViewFilters(getCategoryBaseRows(), state.filters, "categoriesList", categoryColumns);
@@ -1489,7 +1511,6 @@ function renderModal(): string {
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
             <div class="modal-footer px-0 pb-0">
-              ${editing && category ? `<button type="button" class="btn ${category.isArchived ? "btn-outline-success" : "btn-danger archive-record-btn"} me-auto" data-action="toggle-category-subtree-archived" data-id="${category.id}" data-next-archived="${String(!category.isArchived)}">${category.isArchived ? "Restore Record" : "Archive Record"}</button>` : ""}
               <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">${editing ? "Save" : "Create"}</button>
             </div>
@@ -1601,7 +1622,9 @@ function renderModal(): string {
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${purchase.active ? "checked" : ""} /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3">${escapeHtml(purchase.notes || "")}</textarea></label>
             <div class="modal-footer px-0 pb-0">
-              <button type="button" class="btn ${purchase.archived ? "btn-outline-success" : "btn-danger archive-record-btn"} me-auto" data-action="toggle-inventory-archived" data-id="${purchase.id}" data-next-archived="${String(!purchase.archived)}">${purchase.archived ? "Restore Record" : "Archive Record"}</button>
+              <div class="d-flex gap-2 me-auto">
+                <button type="button" class="btn btn-danger" data-action="delete-inventory-record" data-id="${purchase.id}">Delete</button>
+              </div>
               <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">Save</button>
             </div>
@@ -1836,7 +1859,7 @@ function render() {
         ${renderFilterChips(
           "categoriesList",
           "Markets",
-          `<label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-categories" ${state.showArchivedCategories ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>`,
+          "",
         )}
         <div class="table-wrap table-responsive">
           <table id="categories-table" class="table table-striped table-sm table-hover align-middle mb-0">
@@ -1861,13 +1884,13 @@ function render() {
           <div class="section-head">
             <h2 class="h5 mb-0">Investments</h2>
             <div class="d-flex align-items-center gap-2 justify-content-end">
-              <button type="button" class="btn btn-sm btn-success" data-action="open-create-inventory">Create New</button>
+              <button type="button" class="btn btn-sm btn-primary" data-action="open-create-inventory">Create New</button>
             </div>
           </div>
           ${renderFilterChips(
             "inventoryTable",
             "Investments",
-            `<label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" data-action="toggle-show-archived-inventory" ${state.showArchivedInventory ? "checked" : ""}/> <span class="form-check-label">Show archived</span></label>`,
+            "",
           )}
           <div class="table-wrap table-responsive">
             <table id="inventory-table" class="table table-striped table-sm table-hover align-middle mb-0">
@@ -2190,36 +2213,13 @@ async function toggleInventoryActive(id: string, nextActive: boolean) {
   await reloadData();
 }
 
-async function toggleInventoryArchived(id: string, nextArchived: boolean) {
+async function deleteInventoryById(id: string) {
   const rec = await getInventoryRecord(id);
   if (!rec) return;
-  if (nextArchived && !window.confirm(`Archive inventory record "${rec.productName}"?`)) return;
-  rec.archived = nextArchived;
-  if (nextArchived) {
-    rec.active = false;
-  }
-  rec.archivedAt = nextArchived ? nowIso() : undefined;
-  rec.updatedAt = nowIso();
-  await putInventoryRecord(rec);
-  await reloadData();
-}
-
-async function setCategorySubtreeArchived(categoryId: string, nextArchived: boolean) {
-  const rootCategory = getCategoryById(categoryId);
-  if (nextArchived && rootCategory && !window.confirm(`Archive market subtree "${rootCategory.pathNames.join(" / ")}"?`)) return;
-  const subtreeIds = collectSubtreeIds(state.categories, categoryId);
-  const timestamp = nowIso();
-  for (const id of subtreeIds) {
-    const cat = await getCategory(id);
-    if (!cat) continue;
-    cat.isArchived = nextArchived;
-    if (nextArchived) {
-      cat.active = false;
-    }
-    cat.archivedAt = nextArchived ? timestamp : undefined;
-    cat.updatedAt = timestamp;
-    await putCategory(cat);
-  }
+  const confirmed = window.confirm(`Delete investment record "${rec.productName}" permanently? This cannot be undone.`);
+  if (!confirmed) return;
+  await deleteInventoryRecord(id);
+  closeModal();
   await reloadData();
 }
 
@@ -2330,7 +2330,7 @@ async function applyDefaultMarketsTemplate() {
   );
   if (!confirmed) return;
   await replaceAllData({ purchases: [], categories, settings });
-  setState({ filters: [], importText: DEFAULT_MARKETS_IMPORT_TEXT });
+  setState({ filters: createDefaultActiveFilters(), importText: DEFAULT_MARKETS_IMPORT_TEXT });
   await reloadData();
   setToast({ tone: "success", text: "Default markets loaded." });
 }
@@ -2455,17 +2455,9 @@ rootEl.addEventListener("click", async (event) => {
   if (action === "clear-filters") {
     const viewId = actionEl.dataset.viewId as ViewId | undefined;
     if (!viewId) return;
-    setState({ filters: clearFilters(state.filters, viewId) });
-    return;
-  }
-  if (action === "toggle-show-archived-inventory") {
-    const input = actionEl as HTMLInputElement;
-    setState({ showArchivedInventory: input.checked });
-    return;
-  }
-  if (action === "toggle-show-archived-categories") {
-    const input = actionEl as HTMLInputElement;
-    setState({ showArchivedCategories: input.checked });
+    const remainingFilters = clearFilters(state.filters, viewId);
+    const defaultForView = createDefaultActiveFilters().find((f) => f.viewId === viewId);
+    setState({ filters: defaultForView ? [...remainingFilters, defaultForView] : remainingFilters });
     return;
   }
   if (action === "open-create-category") {
@@ -2555,16 +2547,9 @@ rootEl.addEventListener("click", async (event) => {
     if (id) await toggleInventoryActive(id, next);
     return;
   }
-  if (action === "toggle-inventory-archived") {
+  if (action === "delete-inventory-record") {
     const id = actionEl.dataset.id;
-    const next = actionEl.dataset.nextArchived === "true";
-    if (id) await toggleInventoryArchived(id, next);
-    return;
-  }
-  if (action === "toggle-category-subtree-archived") {
-    const id = actionEl.dataset.id;
-    const next = actionEl.dataset.nextArchived === "true";
-    if (id) await setCategorySubtreeArchived(id, next);
+    if (id) await deleteInventoryById(id);
     return;
   }
   if (action === "download-json") {
@@ -2588,7 +2573,7 @@ rootEl.addEventListener("click", async (event) => {
     if (!window.confirm("Wipe all IndexedDB data? This cannot be undone.")) return;
     await clearAllData();
     setState({
-      filters: [],
+      filters: createDefaultActiveFilters(),
       exportText: "",
       importText: DEFAULT_MARKETS_IMPORT_TEXT,
       showArchivedInventory: false,

@@ -437,6 +437,9 @@ body {
 }
 
 .chips-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   min-width: 0;
 }
 
@@ -445,13 +448,14 @@ body {
 }
 
 .chips-list .breadcrumb {
+  align-items: center;
   row-gap: 0.25rem;
 }
 
 .breadcrumb-filter-btn {
   border: 0;
   background: transparent;
-  color: var(--bs-breadcrumb-item-active-color, var(--bs-secondary-color));
+  color: var(--bs-link-color);
   padding: 0.125rem 0.25rem;
   border-radius: 0.25rem;
   text-decoration: underline;
@@ -460,7 +464,7 @@ body {
 }
 
 .breadcrumb-filter-btn:hover {
-  color: var(--bs-primary);
+  color: var(--bs-link-hover-color);
   background: rgba(var(--bs-primary-rgb), 0.08);
 }
 
