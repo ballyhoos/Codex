@@ -77,6 +77,118 @@ let baselineCopyStatusTimer: number | null = null;
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
 
+const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
+  schemaVersion: 2,
+  exportedAt: "2026-03-31T21:08:59.630Z",
+  settings: [
+    { key: "currencyCode", value: "USD" },
+    { key: "currencySymbol", value: "$" },
+    { key: "darkMode", value: false },
+    { key: "showGrowthGraph", value: false },
+    { key: "showMarketsGraphs", value: false },
+  ],
+  categories: [
+    {
+      id: "127726bf-2b61-431a-b9ef-11d01d836123",
+      name: "Bullion",
+      parentId: null,
+      pathIds: ["127726bf-2b61-431a-b9ef-11d01d836123"],
+      pathNames: ["Bullion"],
+      depth: 0,
+      sortOrder: 0,
+      evaluationMode: "snapshot",
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-04T03:49:13.236Z",
+      updatedAt: "2026-03-04T08:14:02.783Z",
+    },
+    {
+      id: "6af66667-7211-44ee-865e-5794bb2f3d3c",
+      name: "Gold",
+      parentId: "127726bf-2b61-431a-b9ef-11d01d836123",
+      pathIds: ["127726bf-2b61-431a-b9ef-11d01d836123", "6af66667-7211-44ee-865e-5794bb2f3d3c"],
+      pathNames: ["Bullion", "Gold"],
+      depth: 1,
+      sortOrder: 0,
+      evaluationMode: "spot",
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-04T03:50:26.185Z",
+      updatedAt: "2026-03-15T23:20:34.173Z",
+    },
+    {
+      id: "364f7799-aa46-43b0-9a23-f9e8ec6b39c2",
+      name: "Mining",
+      parentId: "7d9cb4a4-385e-4f41-9c89-7a71a6385ca3",
+      pathIds: ["7d9cb4a4-385e-4f41-9c89-7a71a6385ca3", "364f7799-aa46-43b0-9a23-f9e8ec6b39c2"],
+      pathNames: ["Shares", "Mining"],
+      depth: 1,
+      sortOrder: 0,
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-31T21:08:59.580Z",
+      updatedAt: "2026-03-31T21:08:59.580Z",
+    },
+    {
+      id: "5c88bcfc-63bc-4c6a-88d4-5fe6c8b68b2b",
+      name: "Cash",
+      parentId: null,
+      pathIds: ["5c88bcfc-63bc-4c6a-88d4-5fe6c8b68b2b"],
+      pathNames: ["Cash"],
+      depth: 0,
+      sortOrder: 1,
+      evaluationMode: "snapshot",
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-04T06:14:51.627Z",
+      updatedAt: "2026-03-04T06:14:51.627Z",
+    },
+    {
+      id: "a03c6f4c-bb7f-4520-b49d-c326026634ee",
+      name: "Silver",
+      parentId: "127726bf-2b61-431a-b9ef-11d01d836123",
+      pathIds: ["127726bf-2b61-431a-b9ef-11d01d836123", "a03c6f4c-bb7f-4520-b49d-c326026634ee"],
+      pathNames: ["Bullion", "Silver"],
+      depth: 1,
+      sortOrder: 1,
+      evaluationMode: "spot",
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-04T03:50:41.282Z",
+      updatedAt: "2026-03-15T23:20:48.705Z",
+    },
+    {
+      id: "3dba18e1-41a2-4cc3-a2fd-f09907a599f7",
+      name: "Super",
+      parentId: null,
+      pathIds: ["3dba18e1-41a2-4cc3-a2fd-f09907a599f7"],
+      pathNames: ["Super"],
+      depth: 0,
+      sortOrder: 2,
+      evaluationMode: "snapshot",
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-15T23:48:34.636Z",
+      updatedAt: "2026-03-15T23:48:34.636Z",
+    },
+    {
+      id: "7d9cb4a4-385e-4f41-9c89-7a71a6385ca3",
+      name: "Shares",
+      parentId: null,
+      pathIds: ["7d9cb4a4-385e-4f41-9c89-7a71a6385ca3"],
+      pathNames: ["Shares"],
+      depth: 0,
+      sortOrder: 3,
+      active: true,
+      isArchived: false,
+      createdAt: "2026-03-31T21:08:47.667Z",
+      updatedAt: "2026-03-31T21:08:47.667Z",
+    },
+  ],
+  purchases: [],
+};
+const DEFAULT_MARKETS_IMPORT_TEXT = JSON.stringify(DEFAULT_MARKETS_IMPORT_BUNDLE);
+
 let state: AppState = {
   inventoryRecords: [],
   categories: [],
@@ -87,7 +199,7 @@ let state: AppState = {
   showArchivedInventory: false,
   showArchivedCategories: false,
   exportText: "",
-  importText: "",
+  importText: DEFAULT_MARKETS_IMPORT_TEXT,
   storageUsageBytes: null,
   storageQuotaBytes: null,
 };
@@ -660,6 +772,12 @@ async function reloadData() {
   }
   let nextReportDateFrom = state.reportDateFrom;
   let nextReportDateTo = state.reportDateTo;
+  let nextImportText = state.importText;
+  if (normalizedCategories.length > 0 && nextImportText === DEFAULT_MARKETS_IMPORT_TEXT) {
+    nextImportText = "";
+  } else if (normalizedCategories.length === 0 && !nextImportText.trim()) {
+    nextImportText = DEFAULT_MARKETS_IMPORT_TEXT;
+  }
   if (!reportDateRangeInitialized) {
     const oldestActiveDate = getOldestActiveInvestmentDate(inventoryRecords);
     if (oldestActiveDate) {
@@ -677,6 +795,7 @@ async function reloadData() {
     storageQuotaBytes,
     reportDateFrom: nextReportDateFrom,
     reportDateTo: nextReportDateTo,
+    importText: nextImportText,
   };
   render();
 }
@@ -1682,6 +1801,12 @@ function render() {
 
       <section class="card shadow-sm" data-filter-section-view-id="categoriesList">
         <div class="card-body">
+        ${state.categories.length === 0 ? `
+          <div class="alert alert-warning py-2 d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2" role="status">
+            <span class="small mb-0">No markets yet. You can load the default markets template.</span>
+            <button type="button" class="btn btn-sm btn-warning" data-action="load-default-markets">Load Default Markets</button>
+          </div>
+        ` : ""}
         <div class="section-head markets-section-head">
           <h2 class="h5 mb-0">Markets</h2>
           <div class="d-flex align-items-center gap-2 justify-content-end markets-section-actions">
@@ -1764,40 +1889,44 @@ function render() {
       <details class="card shadow-sm details-card" data-section="data-tools" ${dataToolsOpen ? "open" : ""}>
         <summary class="card-header">Data Tools</summary>
         <div class="details-content card-body">
-        <div class="tools-grid">
-          <div>
-            <div class="toolbar-row">
-              <button type="button" class="btn btn-outline-primary btn-sm" data-action="download-json">Download JSON</button>
-            </div>
-            <div class="small text-body-secondary mb-2">
-              Storage used (browser estimate): ${
-                state.storageUsageBytes == null
-                  ? "Unavailable"
-                  : state.storageQuotaBytes == null
-                    ? escapeHtml(formatBytes(state.storageUsageBytes))
-                    : `${escapeHtml(formatBytes(state.storageUsageBytes))} of ${escapeHtml(formatBytes(state.storageQuotaBytes))}`
-              }
-              <span class="d-block">Includes this site origin storage (IndexedDB and possibly other browser storage).</span>
-            </div>
-            <label class="form-label">Export / Copy JSON
-              <textarea class="form-control" id="export-text" rows="10" readonly>${escapeHtml(exportText)}</textarea>
-            </label>
+        <div class="small text-body-secondary mb-3">
+          Storage used (browser estimate): ${
+            state.storageUsageBytes == null
+              ? "Unavailable"
+              : state.storageQuotaBytes == null
+                ? escapeHtml(formatBytes(state.storageUsageBytes))
+                : `${escapeHtml(formatBytes(state.storageUsageBytes))} of ${escapeHtml(formatBytes(state.storageQuotaBytes))}`
+          }
+          <span class="d-block">Includes this site origin storage (IndexedDB and possibly other browser storage).</span>
+        </div>
+        <div class="data-tool-block">
+          <div class="data-tool-head">
+            <span class="h6 mb-0">Export</span>
+            <button type="button" class="btn btn-primary btn-sm" data-action="download-json">Export</button>
           </div>
-          <div>
-            <div class="toolbar-row">
-              <input class="form-control" type="file" id="import-file" accept="application/json,.json" />
-              <button type="button" class="btn btn-warning btn-sm" data-action="replace-import">Replace all from JSON</button>
-            </div>
-            <label class="form-label">Import JSON (replace all)
-              <textarea class="form-control" id="import-text" rows="10" placeholder='Paste ExportBundleV1/V2 JSON here'>${escapeHtml(state.importText)}</textarea>
-            </label>
+          <label class="form-label mb-0">Export / Copy JSON
+            <input class="form-control" id="export-text" readonly value="${escapeHtml(exportText)}" />
+          </label>
+        </div>
+        <div class="data-tool-block">
+          <div class="data-tool-head">
+            <span class="h6 mb-0">Import</span>
+            <button type="button" class="btn btn-primary btn-sm" data-action="replace-import">Import</button>
           </div>
+          <div class="toolbar-row">
+            <input class="form-control" type="file" id="import-file" accept="application/json,.json" />
+          </div>
+          <label class="form-label mb-0">Import JSON (replace all)
+            <input class="form-control" id="import-text" placeholder='Paste ExportBundleV1/V2 JSON here' value="${escapeHtml(state.importText)}" />
+          </label>
         </div>
         <div class="danger-zone border border-danger-subtle rounded-3 p-3 mt-3 bg-danger-subtle">
-          <h3 class="h6">Wipe All Data</h3>
+          <div class="data-tool-head mb-2">
+            <h3 class="h6 mb-0">Delete Data</h3>
+            <button type="button" class="danger-btn btn btn-danger btn-sm" data-action="wipe-all">Delete</button>
+          </div>
           <p class="mb-2">Hard delete all IndexedDB data (inventory, categories, settings). This is separate from archive/restore.</p>
           <label class="form-label">Type DELETE to confirm <input class="form-control" id="wipe-confirm" /></label>
-          <button type="button" class="danger-btn btn btn-danger" data-action="wipe-all">Wipe all data</button>
         </div>
         </div>
       </details>
@@ -1844,7 +1973,7 @@ function buildExportBundle(): ExportBundleV2 {
 }
 
 function buildExportJsonText(): string {
-  return JSON.stringify(buildExportBundle(), null, 2);
+  return JSON.stringify(buildExportBundle());
 }
 
 function downloadTextFile(filename: string, content: string, type: string) {
@@ -2186,11 +2315,24 @@ async function handleReplaceImport() {
     const confirmed = window.confirm("Replace all existing data with imported data? This cannot be undone.");
     if (!confirmed) return;
     await replaceAllData({ purchases: importedInventoryRecords, categories, settings });
-    setState({ importText: "" });
+    setState({ importText: DEFAULT_MARKETS_IMPORT_TEXT });
     await reloadData();
   } catch (err) {
     alert(err instanceof Error ? err.message : "Import failed.");
   }
+}
+
+async function applyDefaultMarketsTemplate() {
+  const categories = recomputeCategoryPaths(DEFAULT_MARKETS_IMPORT_BUNDLE.categories.map(normalizeImportedCategory));
+  const settings = DEFAULT_MARKETS_IMPORT_BUNDLE.settings.map((s) => ({ key: String(s.key), value: s.value }));
+  const confirmed = window.confirm(
+    "Load default markets template and replace all existing data? This will keep no investments.",
+  );
+  if (!confirmed) return;
+  await replaceAllData({ purchases: [], categories, settings });
+  setState({ filters: [], importText: DEFAULT_MARKETS_IMPORT_TEXT });
+  await reloadData();
+  setToast({ tone: "success", text: "Default markets loaded." });
 }
 
 function getEventTargetElement(event: Event): HTMLElement | null {
@@ -2433,6 +2575,10 @@ rootEl.addEventListener("click", async (event) => {
     await handleReplaceImport();
     return;
   }
+  if (action === "load-default-markets") {
+    await applyDefaultMarketsTemplate();
+    return;
+  }
   if (action === "wipe-all") {
     const confirmInput = document.querySelector<HTMLInputElement>("#wipe-confirm");
     if (!confirmInput || confirmInput.value !== "DELETE") {
@@ -2441,7 +2587,13 @@ rootEl.addEventListener("click", async (event) => {
     }
     if (!window.confirm("Wipe all IndexedDB data? This cannot be undone.")) return;
     await clearAllData();
-    setState({ filters: [], exportText: "", importText: "", showArchivedInventory: false, showArchivedCategories: false });
+    setState({
+      filters: [],
+      exportText: "",
+      importText: DEFAULT_MARKETS_IMPORT_TEXT,
+      showArchivedInventory: false,
+      showArchivedCategories: false,
+    });
     await reloadData();
     return;
   }
@@ -2534,7 +2686,11 @@ rootEl.addEventListener("change", async (event) => {
   const file = target.files?.[0];
   if (!file) return;
   const text = await file.text();
-  setState({ importText: text });
+  try {
+    setState({ importText: JSON.stringify(JSON.parse(text)) });
+  } catch {
+    setState({ importText: text });
+  }
 });
 
 rootEl.addEventListener("pointermove", (event) => {
