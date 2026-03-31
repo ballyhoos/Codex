@@ -152,7 +152,7 @@ body {
 }
 
 .markets-chart-frame {
-  min-height: 150px;
+  min-height: 230px;
   position: relative;
   border-radius: 0.4rem;
   background: rgba(0, 0, 0, 0.04);
@@ -163,11 +163,11 @@ body {
 
 .markets-chart-canvas {
   width: 100%;
-  min-height: 150px;
+  min-height: 230px;
 }
 
 .markets-chart-empty {
-  min-height: 150px;
+  min-height: 230px;
   margin: 0;
   display: flex;
   align-items: center;
@@ -557,7 +557,7 @@ body {
   .markets-chart-frame,
   .markets-chart-canvas,
   .markets-chart-empty {
-    min-height: 130px;
+    min-height: 200px;
   }
 
   .growth-chart-frame,

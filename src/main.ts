@@ -87,7 +87,7 @@ const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
     { key: "currencySymbol", value: "$" },
     { key: "darkMode", value: false },
     { key: "showGrowthGraph", value: false },
-    { key: "showMarketsGraphs", value: false },
+    { key: "showMarketsGraphs", value: true },
   ],
   categories: [
     {
@@ -230,7 +230,7 @@ let state: AppState = {
 const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
 const DEFAULT_DARK_MODE = false;
-const DEFAULT_SHOW_MARKETS_GRAPHS = false;
+const DEFAULT_SHOW_MARKETS_GRAPHS = true;
 const CURRENCY_SYMBOL_OPTIONS = [
   { value: "$", label: "Dollar ($)" },
   { value: "€", label: "Euro (€)" },
@@ -290,12 +290,14 @@ function formatBytes(bytes: number): string {
 
 function formatMoney(cents: number): string {
   const symbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
+  const absAmount = Math.abs(cents) / 100;
   const amount = new Intl.NumberFormat(undefined, {
     style: "decimal",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(cents / 100);
-  return `${symbol}${amount}`;
+  }).format(absAmount);
+  const sign = cents < 0 ? "-" : "";
+  return `${sign}${symbol}${amount}`;
 }
 
 function formatMoneyCompact(cents: number): string {
@@ -479,29 +481,30 @@ function initDataTables() {
 type MarketWidgetDatum = {
   id: string;
   label: string;
-  totalCents: number;
+  startCents: number;
+  endCents: number;
+  changeCents: number;
 };
 
 function buildMarketWidgetData(
-  filteredCategories: CategoryNode[],
-  categoryColumns: ColumnDef<CategoryNode>[],
-  hasCategoryFilters: boolean,
+  growthRows: GrowthReportRow[],
 ): MarketWidgetDatum[] {
-  const totalColumn = categoryColumns.find((c) => c.key === "computedTotalCents");
-  if (!totalColumn) return [];
-  const scopeRows = hasCategoryFilters ? filteredCategories : filteredCategories.filter((category) => category.parentId == null);
-  return scopeRows
-    .map((category) => {
-      const rawValue = totalColumn.getValue(category);
-      if (typeof rawValue !== "number" || !Number.isFinite(rawValue) || rawValue <= 0) return null;
+  return growthRows
+    .map((row) => {
+      const startCents = row.startValueCents ?? 0;
+      const endCents = row.endValueCents ?? 0;
+      if (!Number.isFinite(startCents) || !Number.isFinite(endCents)) return null;
+      if (startCents <= 0 && endCents <= 0) return null;
       return {
-        id: category.id,
-        label: category.pathNames.join(" / "),
-        totalCents: rawValue,
+        id: row.marketId,
+        label: row.marketLabel,
+        startCents,
+        endCents,
+        changeCents: endCents - startCents,
       };
     })
     .filter((row): row is MarketWidgetDatum => row != null)
-    .sort((a, b) => b.totalCents - a.totalCents);
+    .sort((a, b) => b.endCents - a.endCents);
 }
 
 function showMarketChartMessage(chartId: string, message: string) {
@@ -584,15 +587,16 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
 
   const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
   const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
-  const chartFontSize = isMobile ? 11 : 13;
+  const chartFontSize = isMobile ? 12 : 14;
   const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
   const chartTextColor = isDarkTheme ? "#e9ecef" : "#212529";
   const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
   const valueLabelColor = isDarkTheme ? "#f8f9fa" : "#212529";
-  const donutSeriesData = widgetData.map((row) => ({ name: row.label, value: row.totalCents }));
+  const donutSeriesData = widgetData.map((row) => ({ name: row.label, value: row.endCents }));
   const topRows = widgetData.slice(0, 5);
   const topRowsDisplay = [...topRows].reverse();
-  const topMax = topRows.reduce((max, row) => Math.max(max, row.totalCents), 0);
+  const topRowsByLabel = new Map(topRowsDisplay.map((row) => [row.label, row]));
+  const topMax = topRows.reduce((max, row) => Math.max(max, row.endCents), 0);
   const topAxisMax = topMax > 0 ? Math.ceil(topMax * 1.2) : 1;
   marketsDonutChart = window.echarts.init(donutEl);
   marketsTopChart = window.echarts.init(topEl);
@@ -609,12 +613,13 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
       ? {
         orient: "horizontal",
         bottom: 0,
+        left: 12,
         icon: "circle",
         textStyle: { color: chartTextColor, fontSize: chartFontSize },
       }
       : {
         orient: "vertical",
-        right: 0,
+        left: 12,
         top: "center",
         icon: "circle",
         textStyle: { color: chartTextColor, fontSize: chartFontSize },
@@ -624,9 +629,13 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         type: "pie",
         z: 10,
         radius: ["36%", "54%"],
-        center: isMobile ? ["50%", "50%"] : ["46%", "50%"],
+        center: isMobile ? ["50%", "50%"] : ["54%", "50%"],
         data: donutSeriesData,
         avoidLabelOverlap: false,
+        itemStyle: {
+          borderColor: isDarkTheme ? "#11161d" : "#ffffff",
+          borderWidth: 3,
+        },
         labelLayout: {
           hideOverlap: false,
         },
@@ -672,10 +681,10 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
   });
 
   marketsTopChart.setOption({
-    color: ["#198754"],
+    color: ["#20c997"],
     grid: {
       left: "4%",
-      right: "4%",
+      right: "10%",
       top: "8%",
       bottom: "2%",
       containLabel: true,
@@ -684,10 +693,14 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
       trigger: "axis",
       axisPointer: { type: "shadow" },
       textStyle: { fontSize: chartFontSize },
-      formatter: (params: Array<{ name: string; value: number }>) => {
-        const row = params[0];
-        if (!row) return "";
-        return `${escapeHtml(row.name)}: ${formatMoney(row.value)}`;
+      formatter: (params: Array<{ name: string; value: number; seriesName: string }>) => {
+        const market = params[0]?.name;
+        if (!market) return "";
+        const end = params.find((p) => p.seriesName === "End")?.value ?? 0;
+        const row = topRowsDisplay.find((r) => r.label === market);
+        const change = row?.changeCents ?? 0;
+        const changePrefix = change > 0 ? "+" : "";
+        return `${escapeHtml(market)}<br/>End: ${formatMoney(end)}<br/>Change: ${changePrefix}${formatMoney(change)}`;
       },
     },
     xAxis: {
@@ -704,29 +717,55 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
       axisLabel: {
         color: mutedTextColor,
         fontSize: chartFontSize,
-        formatter: (value: string) => truncateLabel(value),
+        lineHeight: chartFontSize + 3,
+        formatter: (value: string) => {
+          const row = topRowsByLabel.get(value);
+          if (!row) return truncateLabel(value);
+          const changePrefix = row.changeCents > 0 ? "+" : "";
+          return `${truncateLabel(value)}\n(${changePrefix}${formatMoney(row.changeCents)})`;
+        },
       },
       axisTick: { show: false },
       axisLine: { show: false },
     },
     series: [
       {
+        name: "End",
         type: "bar",
-        data: topRowsDisplay.map((row) => row.totalCents),
-        barMaxWidth: 24,
+        data: topRowsDisplay.map((row) => ({
+          value: row.endCents,
+          itemStyle: {
+            color:
+              row.changeCents > 0
+                ? "#20c997"
+                : row.changeCents < 0
+                  ? "#dc3545"
+                  : "#0dcaf0",
+          },
+        })),
+        barWidth: 30,
+        barCategoryGap: "12%",
+        barGap: "0%",
         showBackground: true,
         backgroundStyle: {
-          color: "rgba(25, 135, 84, 0.08)",
+          color: "rgba(108, 117, 125, 0.1)",
         },
         label: {
           show: true,
           position: "right",
+          distance: 6,
           color: chartTextColor,
           fontSize: chartFontSize,
           formatter: (params: { value: number }) => formatMoney(params.value),
         },
       },
     ],
+  });
+
+  // Ensure charts pick up the latest container size after layout/style changes.
+  window.requestAnimationFrame(() => {
+    marketsDonutChart?.resize();
+    marketsTopChart?.resize();
   });
 
   attachMarketChartsResizeHandler();
@@ -1694,12 +1733,12 @@ function render() {
     categoryDescendantsMap,
     filteredInventoryRecords,
     filteredCategories,
-    categoryTotals,
   } = getDerived();
-  const hasCategoryFilters = state.filters.some((filter) => filter.viewId === "categoriesList");
-  const marketWidgetData = buildMarketWidgetData(filteredCategories, categoryColumns, hasCategoryFilters);
   const report = buildGrowthReportRows(categoryDescendantsMap);
+  const marketWidgetData = buildMarketWidgetData(report.rows);
   const showMarketsGraphs = getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS;
+  const hasTopLevelMarkets = filteredCategories.some((category) => category.parentId == null);
+  const showMarketsGraphsSection = showMarketsGraphs && hasTopLevelMarkets && marketWidgetData.length > 0;
   const validExpandedGrowthMarketIds = new Set(
     [...expandedGrowthMarketIds].filter((id) => (report.childRowsByParent[id]?.length || 0) > 0),
   );
@@ -1789,6 +1828,26 @@ function render() {
           <div class="section-head">
             <h2 class="h5 mb-0">Growth Report</h2>
           </div>
+          ${showMarketsGraphsSection ? `
+            <div class="markets-widget-grid mb-0">
+              <article class="markets-widget-card card border-0">
+                <div class="card-body p-0 p-md-1">
+                  <div class="markets-chart-frame">
+                    <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
+                    <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
+                  </div>
+                </div>
+              </article>
+              <article class="markets-widget-card card border-0">
+                <div class="card-body p-0 p-md-1">
+                  <div class="markets-chart-frame">
+                    <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
+                    <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
+                  </div>
+                </div>
+              </article>
+            </div>
+          ` : ""}
           <p class="small text-body-secondary mb-2">
             Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
           </p>
@@ -1872,26 +1931,6 @@ function render() {
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
-        ${showMarketsGraphs ? `
-          <div class="markets-widget-grid mb-2">
-            <article class="markets-widget-card card border-0">
-              <div class="card-body p-0 p-md-1">
-                <div class="markets-chart-frame">
-                  <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
-                  <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
-                </div>
-              </div>
-            </article>
-            <article class="markets-widget-card card border-0">
-              <div class="card-body p-0 p-md-1">
-                <div class="markets-chart-frame">
-                  <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
-                  <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
-                </div>
-              </div>
-            </article>
-          </div>
-        ` : ""}
         ${renderFilterChips(
           "categoriesList",
           "Markets",
