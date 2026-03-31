@@ -145,6 +145,10 @@ export async function getCategory(id: string) {
   return (await dbPromise).get("categories", id);
 }
 
+export async function deleteCategory(id: string) {
+  await (await dbPromise).delete("categories", id);
+}
+
 export async function listSettings() {
   return (await dbPromise).getAll("settings");
 }

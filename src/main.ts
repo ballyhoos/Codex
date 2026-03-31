@@ -1,6 +1,7 @@
 import "./styles.css";
 import {
   clearAllData,
+  deleteCategory,
   deleteInventoryRecord,
   getCategory,
   getInventoryRecord,
@@ -829,7 +830,7 @@ function getCategoryById(id: string | null | undefined): CategoryNode | undefine
 
 function getCategoryPathLabel(categoryId: string): string {
   const c = getCategoryById(categoryId);
-  if (!c) return "(Unknown category)";
+  if (!c) return "-";
   return c.pathNames.join(" / ");
 }
 
@@ -1457,6 +1458,11 @@ function renderModal(): string {
     const editing = modalState.kind === "categoryEdit";
     const category = modalState.kind === "categoryEdit" ? getCategoryById(modalState.categoryId) : undefined;
     if (editing && !category) return "";
+    const linkedInvestments = editing && category
+      ? state.inventoryRecords
+        .filter((record) => record.categoryId === category.id)
+        .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate))
+      : [];
     const excludedIds = editing && category ? new Set(collectSubtreeIds(state.categories, category.id)) : undefined;
     const categoryDescendantsMap = buildDescendantMap(state.categories);
     const filteredInventoryForCategoryStats = applyViewFilters(
@@ -1510,7 +1516,37 @@ function renderModal(): string {
               />
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
+            ${editing ? `
+              <div>
+                <div class="small fw-semibold mb-1">Linked Investments (${linkedInvestments.length})</div>
+                ${
+                  linkedInvestments.length > 0
+                    ? `<div class="table-wrap table-responsive">
+                        <table class="table table-striped table-sm align-middle mb-0 dataTable">
+                          <thead>
+                            <tr>
+                              <th>Name</th>
+                              <th class="text-end">Value</th>
+                              <th>Date</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${linkedInvestments
+                              .map((record) => `<tr>
+                                <td><button type="button" class="btn btn-link p-0 align-baseline" data-action="edit-inventory" data-id="${escapeHtml(record.id)}">${escapeHtml(record.productName)}</button></td>
+                                <td class="text-end">${escapeHtml(formatMoney(record.totalPriceCents))}</td>
+                                <td>${escapeHtml(record.purchaseDate)}</td>
+                              </tr>`)
+                              .join("")}
+                          </tbody>
+                        </table>
+                      </div>`
+                    : `<div class="small text-body-secondary">No investments are currently linked to this market.</div>`
+                }
+              </div>
+            ` : ""}
             <div class="modal-footer px-0 pb-0">
+              ${editing && category ? `<button type="button" class="btn btn-danger me-auto" data-action="delete-category-record" data-id="${category.id}">Delete</button>` : ""}
               <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">${editing ? "Save" : "Create"}</button>
             </div>
@@ -1536,7 +1572,7 @@ function renderModal(): string {
             <input type="hidden" name="baselineValue" value="" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${new Date().toISOString().slice(0, 10)}" /></label>
             <label>Market
-              <select class="form-select" name="categoryId" required>
+              <select class="form-select" name="categoryId">
                 <option value="">Select market</option>
                 ${categoryOptions()}
               </select>
@@ -1592,7 +1628,7 @@ function renderModal(): string {
             <input type="hidden" name="baselineValue" value="${escapeHtml(moneyInputFromCents(purchase.baselineValueCents))}" />
             <label class="form-label mb-0">Date<input class="form-control" type="date" name="purchaseDate" required value="${escapeHtml(purchase.purchaseDate)}" /></label>
             <label>Market
-              <select class="form-select" name="categoryId" required>
+              <select class="form-select" name="categoryId">
                 <option value="">Select market</option>
                 ${categoryOptions(undefined, purchase.categoryId)}
               </select>
@@ -2131,8 +2167,8 @@ async function handleInventorySubmit(form: HTMLFormElement) {
   const active = fd.get("active") === "on";
   const notes = String(fd.get("notes") || "").trim();
 
-  if (!purchaseDate || !productName || !categoryId) {
-    alert("Date, product name, and category are required.");
+  if (!purchaseDate || !productName) {
+    alert("Date and product name are required.");
     return;
   }
   if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -2151,7 +2187,7 @@ async function handleInventorySubmit(form: HTMLFormElement) {
     alert("Baseline value is invalid.");
     return;
   }
-  if (!getCategoryById(categoryId)) {
+  if (categoryId && !getCategoryById(categoryId)) {
     alert("Select a valid category.");
     return;
   }
@@ -2219,6 +2255,37 @@ async function deleteInventoryById(id: string) {
   const confirmed = window.confirm(`Delete investment record "${rec.productName}" permanently? This cannot be undone.`);
   if (!confirmed) return;
   await deleteInventoryRecord(id);
+  closeModal();
+  await reloadData();
+}
+
+async function deleteCategoryById(id: string) {
+  const category = await getCategory(id);
+  if (!category) return;
+  const linkedInvestmentCount = state.inventoryRecords.filter((rec) => rec.categoryId === id).length;
+  const confirmed = window.confirm(
+    `Delete market "${category.pathNames.join(" / ")}"? This cannot be undone.\n\n` +
+      `This will also affect:\n` +
+      `- ${linkedInvestmentCount} investment record(s): their Market will be cleared.`,
+  );
+  if (!confirmed) return;
+
+  const timestamp = nowIso();
+  for (const rec of state.inventoryRecords) {
+    if (rec.categoryId !== id) continue;
+    rec.categoryId = "";
+    rec.updatedAt = timestamp;
+    await putInventoryRecord(rec);
+  }
+
+  for (const child of state.categories) {
+    if (child.parentId !== id) continue;
+    child.parentId = null;
+    child.updatedAt = timestamp;
+    await putCategory(child);
+  }
+
+  await deleteCategory(id);
   closeModal();
   await reloadData();
 }
@@ -2550,6 +2617,11 @@ rootEl.addEventListener("click", async (event) => {
   if (action === "delete-inventory-record") {
     const id = actionEl.dataset.id;
     if (id) await deleteInventoryById(id);
+    return;
+  }
+  if (action === "delete-category-record") {
+    const id = actionEl.dataset.id;
+    if (id) await deleteCategoryById(id);
     return;
   }
   if (action === "download-json") {
