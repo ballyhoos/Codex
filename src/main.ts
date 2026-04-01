@@ -30,6 +30,8 @@ import type {
 const appEl = document.querySelector<HTMLDivElement>("#app");
 if (!appEl) throw new Error("#app not found");
 const rootEl: HTMLDivElement = appEl;
+const APP_BUILD_VERSION =
+  document.querySelector<HTMLMetaElement>('meta[name="app-build-version"]')?.content || "dev";
 
 type ModalState =
   | { kind: "none" }
@@ -1988,6 +1990,7 @@ function render() {
         <summary class="card-header">Data Tools</summary>
         <div class="details-content card-body">
         <div class="small text-body-secondary mb-3">
+          <span class="d-block">App version: ${escapeHtml(APP_BUILD_VERSION)}</span>
           Storage used (browser estimate): ${
             state.storageUsageBytes == null
               ? "Unavailable"

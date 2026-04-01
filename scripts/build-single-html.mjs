@@ -3,13 +3,15 @@ import path from "node:path";
 
 const distDir = path.resolve("dist");
 const distIndexPath = path.join(distDir, "index.html");
-const outputPath = path.join(distDir, "investments.app.html");
 
 if (!fs.existsSync(distIndexPath)) {
   throw new Error("dist/index.html not found. Run `npm run build` first.");
 }
 
 let html = fs.readFileSync(distIndexPath, "utf8");
+const buildVersionMatch = html.match(/<meta name="app-build-version" content="([^"]+)"/);
+const buildVersion = buildVersionMatch?.[1] || Date.now().toString();
+const versionedOutputPath = path.join(distDir, `investments.app.v${buildVersion}.html`);
 
 const jsTagMatch = html.match(/<script type="module" crossorigin src="([^"]+)"><\/script>/);
 const cssTagMatch = html.match(/<link rel="stylesheet" crossorigin href="([^"]+)">/);
@@ -31,9 +33,18 @@ const cssAssetPath = resolveBuiltAssetPath(cssTagMatch[1]);
 
 const js = fs.readFileSync(jsAssetPath, "utf8");
 const css = fs.readFileSync(cssAssetPath, "utf8");
+const jsBase64 = Buffer.from(js, "utf8").toString("base64");
+const safeCss = css.replace(/<\/style>/gi, "<\\/style>");
+const jsLoader = `<script type="module">
+const binary = atob("${jsBase64}");
+const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+const blob = new Blob([bytes], { type: "text/javascript;charset=utf-8" });
+const moduleUrl = URL.createObjectURL(blob);
+import(moduleUrl).finally(() => URL.revokeObjectURL(moduleUrl));
+</script>`;
 
-html = html.replace(cssTagMatch[0], `<style>\n${css}\n</style>`);
-html = html.replace(jsTagMatch[0], `<script type="module">\n${js}\n</script>`);
+html = html.replace(cssTagMatch[0], `<style>\n${safeCss}\n</style>`);
+html = html.replace(jsTagMatch[0], jsLoader);
 
-fs.writeFileSync(outputPath, html);
-console.log(`Wrote ${path.relative(process.cwd(), outputPath)}`);
+fs.writeFileSync(versionedOutputPath, html);
+console.log(`Wrote ${path.relative(process.cwd(), versionedOutputPath)}`);
