@@ -8,6 +8,7 @@
     "build": "tsc && vite build && npm run build:single-html",
     "preview": "vite preview",
     "build:single-html": "node scripts/build-single-html.mjs",
+    "build:single-html:versioned-dist": "GENERATE_VERSIONED_HTML=1 VERSIONED_HTML_DIR=dist npm run build",
     "build:single-html:full": "npm run build",
     "single": "npm run build:single-html",
     "single:full": "npm run build:single-html:full"

@@ -5,12 +5,17 @@ const distDir = path.resolve("dist");
 const distIndexPath = path.join(distDir, "index.html");
 const docsDir = path.resolve("docs");
 const docsIndexPath = path.join(docsDir, "index.html");
+const shouldWriteVersioned = process.env.GENERATE_VERSIONED_HTML === "1";
+const versionedOutputDir = path.resolve(process.env.VERSIONED_HTML_DIR || "dist");
 
 if (!fs.existsSync(distIndexPath)) {
   throw new Error("dist/index.html not found. Run `npm run build` first.");
 }
 
 let html = fs.readFileSync(distIndexPath, "utf8");
+const buildVersionMatch = html.match(/<meta name="app-build-version" content="([^"]+)"/);
+const buildVersion = buildVersionMatch?.[1] || Date.now().toString();
+const versionedOutputPath = path.join(versionedOutputDir, `investments.app.v${buildVersion}.html`);
 
 const jsTagMatch = html.match(/<script type="module" crossorigin src="([^"]+)"><\/script>/);
 const cssTagMatch = html.match(/<link rel="stylesheet" crossorigin href="([^"]+)">/);
@@ -44,6 +49,14 @@ import(moduleUrl).finally(() => URL.revokeObjectURL(moduleUrl));
 
 html = html.replace(cssTagMatch[0], `<style>\n${safeCss}\n</style>`);
 html = html.replace(jsTagMatch[0], jsLoader);
+
+if (shouldWriteVersioned) {
+  if (!fs.existsSync(versionedOutputDir)) {
+    fs.mkdirSync(versionedOutputDir, { recursive: true });
+  }
+  fs.writeFileSync(versionedOutputPath, html);
+  console.log(`Wrote ${path.relative(process.cwd(), versionedOutputPath)}`);
+}
 
 fs.writeFileSync(distIndexPath, html);
 if (!fs.existsSync(docsDir)) {
