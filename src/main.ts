@@ -2491,7 +2491,6 @@ function render() {
         <summary class="card-header">Data Tools</summary>
         <div class="details-content card-body">
         <div class="small text-body-secondary mb-3">
-          <span class="d-block">App version: ${escapeHtml(APP_BUILD_VERSION)}</span>
           Storage used (browser estimate): ${
             state.storageUsageBytes == null
               ? "Unavailable"
@@ -2532,6 +2531,10 @@ function render() {
         </div>
         </div>
       </details>
+
+      <footer class="app-version-footer text-end text-body-secondary small">
+        App version: ${escapeHtml(APP_BUILD_VERSION)}
+      </footer>
     </div>
     ${renderModal()}
   `;
