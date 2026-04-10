@@ -17,7 +17,7 @@ function getLocalBuildVersion(): string {
 const buildVersion = getLocalBuildVersion();
 
 export default defineConfig({
-  base: "/investments/",
+  base: "./",
   plugins: [
     {
       name: "inject-build-version",

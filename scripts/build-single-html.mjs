@@ -3,6 +3,8 @@ import path from "node:path";
 
 const distDir = path.resolve("dist");
 const distIndexPath = path.join(distDir, "index.html");
+const docsDir = path.resolve("docs");
+const docsIndexPath = path.join(docsDir, "index.html");
 
 if (!fs.existsSync(distIndexPath)) {
   throw new Error("dist/index.html not found. Run `npm run build` first.");
@@ -11,7 +13,7 @@ if (!fs.existsSync(distIndexPath)) {
 let html = fs.readFileSync(distIndexPath, "utf8");
 const buildVersionMatch = html.match(/<meta name="app-build-version" content="([^"]+)"/);
 const buildVersion = buildVersionMatch?.[1] || Date.now().toString();
-const versionedOutputPath = path.join(distDir, `investments.app.v${buildVersion}.html`);
+const versionedOutputPath = path.join(docsDir, `investments.app.v${buildVersion}.html`);
 
 const jsTagMatch = html.match(/<script type="module" crossorigin src="([^"]+)"><\/script>/);
 const cssTagMatch = html.match(/<link rel="stylesheet" crossorigin href="([^"]+)">/);
@@ -47,4 +49,11 @@ html = html.replace(cssTagMatch[0], `<style>\n${safeCss}\n</style>`);
 html = html.replace(jsTagMatch[0], jsLoader);
 
 fs.writeFileSync(versionedOutputPath, html);
+fs.writeFileSync(distIndexPath, html);
+if (!fs.existsSync(docsDir)) {
+  fs.mkdirSync(docsDir, { recursive: true });
+}
+fs.writeFileSync(docsIndexPath, html);
 console.log(`Wrote ${path.relative(process.cwd(), versionedOutputPath)}`);
+console.log(`Updated ${path.relative(process.cwd(), distIndexPath)} (self-contained)`);
+console.log(`Copied ${path.relative(process.cwd(), docsIndexPath)} (for GitHub Pages)`);
