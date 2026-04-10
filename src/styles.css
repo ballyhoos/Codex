@@ -379,6 +379,11 @@ body {
   white-space: nowrap;
 }
 
+.actions-separator {
+  color: var(--bs-secondary-color);
+  user-select: none;
+}
+
 .table-wrap thead th.actions-col {
   text-align: right;
 }

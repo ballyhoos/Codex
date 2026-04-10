@@ -80,6 +80,13 @@ let reportDateRangeInitialized = false;
 let baselineCopyStatusTimer: number | null = null;
 let toastTimer: number | null = null;
 let toastState: { tone: "success" | "warning" | "danger"; text: string } | null = null;
+let marketsSpotMessageTimer: number | null = null;
+let marketsSpotMessage: { tone: "success" | "warning" | "danger"; text: string } | null = null;
+let spotRefreshInFlight = false;
+let spotRefreshCooldownUntil = 0;
+let spotRefreshCooldownTimer: number | null = null;
+let alphaVantageLastRequestAt = 0;
+const fxRateCache = new Map<string, { rate: number; cachedAt: number }>();
 
 const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
   schemaVersion: 2,
@@ -116,6 +123,7 @@ const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
       sortOrder: 0,
       evaluationMode: "spot",
       active: true,
+      spotCode: "XAU",
       isArchived: false,
       createdAt: "2026-03-04T03:50:26.185Z",
       updatedAt: "2026-03-15T23:20:34.173Z",
@@ -157,6 +165,7 @@ const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
       sortOrder: 1,
       evaluationMode: "spot",
       active: true,
+      spotCode: "XAG",
       isArchived: false,
       createdAt: "2026-03-04T03:50:41.282Z",
       updatedAt: "2026-03-15T23:20:48.705Z",
@@ -233,6 +242,9 @@ const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
 const DEFAULT_DARK_MODE = false;
 const DEFAULT_SHOW_MARKETS_GRAPHS = true;
+const SPOT_REFRESH_COOLDOWN_MS = 15_000;
+const ALPHA_VANTAGE_MIN_REQUEST_GAP_MS = 1100;
+const FX_RATE_CACHE_TTL_MS = 60 * 60 * 1000;
 const CURRENCY_SYMBOL_OPTIONS = [
   { value: "$", label: "Dollar ($)" },
   { value: "€", label: "Euro (€)" },
@@ -330,6 +342,201 @@ function parseMoneyToCents(raw: string): number | null {
   return Math.round(n * 100);
 }
 
+type SpotRefreshRoute =
+  | { kind: "bullion"; metal: "XAG" | "XAU"; quoteCurrency?: string; normalizedCode: string }
+  | { kind: "equity"; symbol: string; normalizedCode: string };
+
+function normalizeUserMarketCode(raw: string): string {
+  return raw.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function parseBullionCode(code: string): SpotRefreshRoute | null {
+  const normalized = code.replace(/[\/_-]/g, "");
+  const aliases: Record<string, { metal: "XAG" | "XAU"; quoteCurrency?: string }> = {
+    XAG: { metal: "XAG" },
+    XAU: { metal: "XAU" },
+    SILVER: { metal: "XAG" },
+    GOLD: { metal: "XAU" },
+    XAGUSD: { metal: "XAG", quoteCurrency: "USD" },
+    XAUUSD: { metal: "XAU", quoteCurrency: "USD" },
+  };
+  const alias = aliases[normalized];
+  if (alias) {
+    return { kind: "bullion", metal: alias.metal, quoteCurrency: alias.quoteCurrency, normalizedCode: normalized };
+  }
+
+  let match = normalized.match(/^(XAG|XAU)([A-Z]{3})$/);
+  if (match) {
+    return { kind: "bullion", metal: match[1] as "XAG" | "XAU", quoteCurrency: match[2], normalizedCode: normalized };
+  }
+  match = normalized.match(/^(SILVER|GOLD)([A-Z]{3})$/);
+  if (match) {
+    return {
+      kind: "bullion",
+      metal: match[1] === "SILVER" ? "XAG" : "XAU",
+      quoteCurrency: match[2],
+      normalizedCode: normalized,
+    };
+  }
+  return null;
+}
+
+function resolveSpotRefreshRoute(rawCode: string): SpotRefreshRoute | null {
+  const normalized = normalizeUserMarketCode(rawCode);
+  if (!normalized) return null;
+  const bullion = parseBullionCode(normalized);
+  if (bullion) return bullion;
+  if (/^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(normalized)) {
+    return { kind: "equity", symbol: normalized, normalizedCode: normalized };
+  }
+  return null;
+}
+
+function parseFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string") return null;
+  const parsed = Number(value.replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function collectNumericEntries(value: unknown, path = "", out: Array<{ path: string; value: number }> = []): Array<{ path: string; value: number }> {
+  if (value == null) return out;
+  const asNumber = parseFiniteNumber(value);
+  if (asNumber != null) {
+    out.push({ path, value: asNumber });
+    return out;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => collectNumericEntries(v, `${path}[${i}]`, out));
+    return out;
+  }
+  if (typeof value === "object") {
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      const nextPath = path ? `${path}.${key}` : key;
+      collectNumericEntries(nested, nextPath, out);
+    }
+  }
+  return out;
+}
+
+function pickNumericByPath(entries: Array<{ path: string; value: number }>, tokens: string[]): number | null {
+  const loweredTokens = tokens.map((token) => token.toLowerCase());
+  const byToken = entries.find((entry) => {
+    const p = entry.path.toLowerCase();
+    return loweredTokens.some((token) => p.includes(token));
+  });
+  if (byToken) return byToken.value;
+  const byPriceLike = entries.find((entry) => {
+    const p = entry.path.toLowerCase();
+    return p.includes("price") || p.includes("rate") || p.includes("value");
+  });
+  if (byPriceLike) return byPriceLike.value;
+  return entries[0]?.value ?? null;
+}
+
+async function fetchAlphaVantagePayload(params: Record<string, string>, apiKey: string): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  const waitMs = Math.max(0, alphaVantageLastRequestAt + ALPHA_VANTAGE_MIN_REQUEST_GAP_MS - now);
+  if (waitMs > 0) {
+    await new Promise((resolve) => window.setTimeout(resolve, waitMs));
+  }
+  const url = new URL("https://www.alphavantage.co/query");
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  url.searchParams.set("apikey", apiKey);
+
+  alphaVantageLastRequestAt = Date.now();
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+  const data = await res.json() as Record<string, unknown>;
+  const note = typeof data.Note === "string" ? data.Note : typeof data.Information === "string" ? data.Information : null;
+  if (note) {
+    const n = note.toLowerCase();
+    if (n.includes("per second") || n.includes("rate limit") || n.includes("25 requests per day")) {
+      throw new Error("Alpha Vantage limit reached. Please wait and retry (free tier: 1 req/sec, 25/day).");
+    }
+    throw new Error(note);
+  }
+  if (typeof data["Error Message"] === "string") throw new Error(String(data["Error Message"]));
+  return data;
+}
+
+function extractFxRate(payload: Record<string, unknown>): number | null {
+  const fx = (payload["Realtime Currency Exchange Rate"] as Record<string, unknown> | undefined)?.["5. Exchange Rate"];
+  const direct = parseFiniteNumber(fx);
+  if (direct != null && direct > 0) return direct;
+  const allNumbers = collectNumericEntries(payload);
+  return pickNumericByPath(allNumbers, ["exchange rate", "rate"]);
+}
+
+function extractGlobalQuotePrice(payload: Record<string, unknown>): number | null {
+  const quote = payload["Global Quote"] as Record<string, unknown> | undefined;
+  const direct = parseFiniteNumber(quote?.["05. price"]);
+  if (direct != null) return direct;
+  const allNumbers = collectNumericEntries(payload);
+  return pickNumericByPath(allNumbers, ["global quote", "price", "close"]);
+}
+
+function extractBullionPrice(payload: Record<string, unknown>, metal: "XAG" | "XAU"): number | null {
+  const allNumbers = collectNumericEntries(payload);
+  const metalTokens = metal === "XAG" ? ["silver", "xag"] : ["gold", "xau"];
+  return pickNumericByPath(allNumbers, [...metalTokens, "price", "rate", "value"]);
+}
+
+function extractBullionCurrency(payload: Record<string, unknown>): string | null {
+  const directKeys = ["currency", "Currency", "quote_currency", "QuoteCurrency", "to_currency"];
+  for (const key of directKeys) {
+    const value = payload[key];
+    if (typeof value === "string") {
+      const normalized = value.trim().toUpperCase();
+      if (/^[A-Z]{3}$/.test(normalized)) return normalized;
+    }
+  }
+  const stringEntries = Object.entries(payload).filter(([, value]) => typeof value === "string") as Array<[string, string]>;
+  for (const [path, value] of stringEntries) {
+    const normalized = value.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(normalized)) continue;
+    const p = path.toLowerCase();
+    if (p.includes("currency")) return normalized;
+  }
+  return null;
+}
+
+async function fetchFxRate(fromCurrency: string, toCurrency: string, apiKey: string): Promise<number> {
+  if (fromCurrency === toCurrency) return 1;
+  const cacheKey = `${fromCurrency}->${toCurrency}`;
+  const cached = fxRateCache.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < FX_RATE_CACHE_TTL_MS) {
+    return cached.rate;
+  }
+  const payload = await fetchAlphaVantagePayload(
+    {
+      function: "CURRENCY_EXCHANGE_RATE",
+      from_currency: fromCurrency,
+      to_currency: toCurrency,
+    },
+    apiKey,
+  );
+  const rate = extractFxRate(payload);
+  if (rate == null || rate <= 0) throw new Error("Could not parse FX exchange rate.");
+  fxRateCache.set(cacheKey, { rate, cachedAt: Date.now() });
+  return rate;
+}
+
+function inferCurrencyFromEquitySymbol(symbol: string): string | null {
+  const upper = symbol.toUpperCase();
+  if (upper.endsWith(".AX")) return "AUD";
+  return null;
+}
+
+function clearSpotRefreshCooldownTimer() {
+  if (spotRefreshCooldownTimer != null) {
+    window.clearTimeout(spotRefreshCooldownTimer);
+    spotRefreshCooldownTimer = null;
+  }
+}
+
 function getSettingValue<T = unknown>(key: string): T | undefined {
   return state.settings.find((s) => s.key === key)?.value as T | undefined;
 }
@@ -360,6 +567,21 @@ function setToast(toast: { tone: "success" | "warning" | "danger"; text: string 
   }, 3500);
 }
 
+function setMarketsSpotMessage(message: { tone: "success" | "warning" | "danger"; text: string } | null) {
+  if (marketsSpotMessageTimer != null) {
+    window.clearTimeout(marketsSpotMessageTimer);
+    marketsSpotMessageTimer = null;
+  }
+  marketsSpotMessage = message;
+  render();
+  if (!message) return;
+  marketsSpotMessageTimer = window.setTimeout(() => {
+    marketsSpotMessageTimer = null;
+    marketsSpotMessage = null;
+    render();
+  }, 5000);
+}
+
 function openModal(next: ModalState) {
   if (modalState.kind === "none" && document.activeElement instanceof HTMLElement) {
     lastFocusedBeforeModal = document.activeElement;
@@ -371,11 +593,240 @@ function openModal(next: ModalState) {
 function closeModal() {
   if (modalState.kind === "none") return;
   modalState = { kind: "none" };
+  spotRefreshInFlight = false;
+  clearSpotRefreshCooldownTimer();
   render();
   if (lastFocusedBeforeModal && lastFocusedBeforeModal.isConnected) {
     lastFocusedBeforeModal.focus();
   }
   lastFocusedBeforeModal = null;
+}
+
+function getSpotRefreshElements(form: HTMLFormElement) {
+  const button = form.querySelector<HTMLButtonElement>('[data-action="refresh-spot-value"]');
+  const status = form.querySelector<HTMLElement>('[data-role="spot-refresh-status"]');
+  return { button, status };
+}
+
+function setSpotRefreshStatus(
+  form: HTMLFormElement,
+  tone: "muted" | "success" | "warning" | "danger",
+  message: string,
+): void {
+  const { status } = getSpotRefreshElements(form);
+  if (!status) return;
+  status.textContent = message;
+  status.classList.remove("text-body-secondary", "text-success", "text-warning", "text-danger");
+  const classByTone: Record<typeof tone, string> = {
+    muted: "text-body-secondary",
+    success: "text-success",
+    warning: "text-warning",
+    danger: "text-danger",
+  };
+  status.classList.add(classByTone[tone]);
+}
+
+function applySpotRefreshButtonState(form: HTMLFormElement): void {
+  const { button } = getSpotRefreshElements(form);
+  if (!button) return;
+  const inCooldown = Date.now() < spotRefreshCooldownUntil;
+  button.disabled = spotRefreshInFlight || inCooldown;
+  button.textContent = spotRefreshInFlight ? "Getting latest spot value..." : "Get latest spot value";
+}
+
+async function fetchLatestSpotValueCents(rawCode: string, appCurrency: string, apiKey: string): Promise<number> {
+  const route = resolveSpotRefreshRoute(rawCode);
+  if (!route) {
+    throw new Error("Unsupported spot code format.");
+  }
+
+  let sourcePrice: number | null = null;
+  let sourceCurrency: string | null = null;
+  if (route.kind === "bullion") {
+    const bullionPayload = await fetchAlphaVantagePayload(
+      { function: "GOLD_SILVER_SPOT", symbol: route.metal },
+      apiKey,
+    );
+    sourcePrice = extractBullionPrice(bullionPayload, route.metal);
+    sourceCurrency = route.quoteCurrency || extractBullionCurrency(bullionPayload) || "USD";
+    if (sourcePrice == null || sourcePrice <= 0) {
+      const fallbackCurrency = route.quoteCurrency || sourceCurrency || "USD";
+      const fallbackPayload = await fetchAlphaVantagePayload(
+        {
+          function: "CURRENCY_EXCHANGE_RATE",
+          from_currency: route.metal,
+          to_currency: fallbackCurrency,
+        },
+        apiKey,
+      );
+      sourcePrice = extractFxRate(fallbackPayload);
+      sourceCurrency = fallbackCurrency;
+    }
+  } else {
+    const quotePayload = await fetchAlphaVantagePayload(
+      {
+        function: "GLOBAL_QUOTE",
+        symbol: route.symbol,
+      },
+      apiKey,
+    );
+    sourcePrice = extractGlobalQuotePrice(quotePayload);
+    if (sourcePrice == null || sourcePrice <= 0) {
+      throw new Error("Could not parse quote price for this symbol.");
+    }
+    sourceCurrency = inferCurrencyFromEquitySymbol(route.symbol) || appCurrency;
+  }
+
+  if (sourcePrice == null || sourcePrice <= 0) {
+    throw new Error("Could not parse a valid price for this code.");
+  }
+  if (!sourceCurrency || !/^[A-Z]{3}$/.test(sourceCurrency)) {
+    sourceCurrency = appCurrency;
+  }
+
+  let convertedPrice = sourcePrice;
+  if (sourceCurrency !== appCurrency) {
+    const fxRate = await fetchFxRate(sourceCurrency, appCurrency, apiKey);
+    convertedPrice = sourcePrice * fxRate;
+  }
+  if (!Number.isFinite(convertedPrice) || convertedPrice <= 0) {
+    throw new Error("Received invalid price after conversion.");
+  }
+  return Math.round(convertedPrice * 100);
+}
+
+async function handleSpotRefresh(form: HTMLFormElement): Promise<void> {
+  if (spotRefreshInFlight) return;
+  const modeEl = form.querySelector<HTMLInputElement>('input[name="mode"]');
+  const evaluationEl = form.querySelector<HTMLSelectElement>('select[name="evaluationMode"]');
+  const codeEl = form.querySelector<HTMLInputElement>('input[name="spotCode"]');
+  const spotValueEl = form.querySelector<HTMLInputElement>('input[name="spotValue"]');
+  if (!modeEl || modeEl.value !== "edit" || !evaluationEl || evaluationEl.value !== "spot" || !codeEl || !spotValueEl) return;
+
+  const rawCode = codeEl.value.trim();
+  if (!rawCode) {
+    setSpotRefreshStatus(form, "warning", "Set a code before refreshing.");
+    return;
+  }
+  if (Date.now() < spotRefreshCooldownUntil) {
+    const waitSeconds = Math.max(1, Math.ceil((spotRefreshCooldownUntil - Date.now()) / 1000));
+    setSpotRefreshStatus(form, "muted", `Please wait ${waitSeconds}s before refreshing again.`);
+    applySpotRefreshButtonState(form);
+    return;
+  }
+
+  const apiKey = String(getSettingValue<string>("alphaVantageApiKey") || "").trim();
+  if (!apiKey) {
+    setSpotRefreshStatus(form, "warning", "Set Alpha Vantage API Key in Settings first.");
+    return;
+  }
+
+  const appCurrency = String(getSettingValue<string>("currencyCode") || DEFAULT_CURRENCY).trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(appCurrency)) {
+    setSpotRefreshStatus(form, "danger", "Invalid app currency setting.");
+    return;
+  }
+
+  spotRefreshInFlight = true;
+  applySpotRefreshButtonState(form);
+  setSpotRefreshStatus(form, "muted", "Refreshing latest value...");
+  try {
+    const convertedCents = await fetchLatestSpotValueCents(rawCode, appCurrency, apiKey);
+    spotValueEl.value = moneyInputFromCents(convertedCents);
+    setSpotRefreshStatus(form, "success", "Value refreshed.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Refresh failed.";
+    setSpotRefreshStatus(form, "danger", message);
+  } finally {
+    spotRefreshInFlight = false;
+    spotRefreshCooldownUntil = Date.now() + SPOT_REFRESH_COOLDOWN_MS;
+    applySpotRefreshButtonState(form);
+    clearSpotRefreshCooldownTimer();
+    const remaining = Math.max(0, spotRefreshCooldownUntil - Date.now());
+    spotRefreshCooldownTimer = window.setTimeout(() => {
+      spotRefreshCooldownTimer = null;
+      const activeForm = rootEl.querySelector<HTMLFormElement>("#category-form");
+      if (activeForm) {
+        applySpotRefreshButtonState(activeForm);
+        const { status } = getSpotRefreshElements(activeForm);
+        if (status && status.classList.contains("text-body-secondary")) {
+          status.textContent = "";
+        }
+      }
+      render();
+    }, remaining);
+  }
+}
+
+async function handleCategorySpotRefresh(categoryId: string): Promise<void> {
+  if (spotRefreshInFlight) return;
+  const category = getCategoryById(categoryId);
+  if (!category) {
+    setMarketsSpotMessage({ tone: "danger", text: "Market not found." });
+    return;
+  }
+  if (category.evaluationMode !== "spot") {
+    setMarketsSpotMessage({ tone: "warning", text: "Refresh is only available for Spot markets." });
+    return;
+  }
+  const code = (category.spotCode || "").trim();
+  if (!code) {
+    setMarketsSpotMessage({ tone: "warning", text: "Set a market code before refreshing." });
+    return;
+  }
+  if (Date.now() < spotRefreshCooldownUntil) {
+    const waitSeconds = Math.max(1, Math.ceil((spotRefreshCooldownUntil - Date.now()) / 1000));
+    setMarketsSpotMessage({ tone: "warning", text: `Please wait ${waitSeconds}s before refreshing again.` });
+    return;
+  }
+  const apiKey = String(getSettingValue<string>("alphaVantageApiKey") || "").trim();
+  if (!apiKey) {
+    setMarketsSpotMessage({ tone: "warning", text: "Set Alpha Vantage API Key in Settings first." });
+    return;
+  }
+  const appCurrency = String(getSettingValue<string>("currencyCode") || DEFAULT_CURRENCY).trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(appCurrency)) {
+    setMarketsSpotMessage({ tone: "danger", text: "Invalid app currency setting." });
+    return;
+  }
+
+  spotRefreshInFlight = true;
+  setMarketsSpotMessage({ tone: "warning", text: `Refreshing latest spot price for ${category.name}...` });
+  try {
+    const nextValueCents = await fetchLatestSpotValueCents(code, appCurrency, apiKey);
+    const updatedCategory: CategoryNode = {
+      ...category,
+      spotValueCents: nextValueCents,
+      updatedAt: nowIso(),
+    };
+    await putCategory(updatedCategory);
+    await reloadData();
+    setMarketsSpotMessage({
+      tone: "success",
+      text: `${category.name} spot value updated to ${formatMoney(nextValueCents)}.`,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Refresh failed.";
+    setMarketsSpotMessage({ tone: "danger", text: message });
+  } finally {
+    spotRefreshInFlight = false;
+    spotRefreshCooldownUntil = Date.now() + SPOT_REFRESH_COOLDOWN_MS;
+    clearSpotRefreshCooldownTimer();
+    const remaining = Math.max(0, spotRefreshCooldownUntil - Date.now());
+    spotRefreshCooldownTimer = window.setTimeout(() => {
+      spotRefreshCooldownTimer = null;
+      const activeForm = rootEl.querySelector<HTMLFormElement>("#category-form");
+      if (activeForm) {
+        applySpotRefreshButtonState(activeForm);
+        const { status } = getSpotRefreshElements(activeForm);
+        if (status && status.classList.contains("text-body-secondary")) {
+          status.textContent = "";
+        }
+      }
+      render();
+    }, remaining);
+    render();
+  }
 }
 
 function getModalPanelEl(): HTMLElement | null {
@@ -969,12 +1420,22 @@ function syncCategoryEvaluationFields(form: HTMLFormElement) {
   const spotInputEl = form.querySelector<HTMLInputElement>('input[name="spotValue"]');
   const spotCodeGroupEl = form.querySelector<HTMLElement>("[data-spot-code-group]");
   const spotCodeInputEl = form.querySelector<HTMLInputElement>('input[name="spotCode"]');
+  const spotRefreshGroupEl = form.querySelector<HTMLElement>("[data-spot-refresh-group]");
+  const spotRefreshButtonEl = form.querySelector<HTMLButtonElement>('[data-action="refresh-spot-value"]');
   if (!evaluationEl || !spotGroupEl || !spotInputEl || !spotCodeGroupEl || !spotCodeInputEl) return;
   const isSpot = evaluationEl.value === "spot";
+  const hasApiKey = String(getSettingValue<string>("alphaVantageApiKey") || "").trim().length > 0;
   spotGroupEl.hidden = !isSpot;
   spotInputEl.disabled = !isSpot;
-  spotCodeGroupEl.hidden = !isSpot;
-  spotCodeInputEl.disabled = !isSpot;
+  spotCodeGroupEl.hidden = !(isSpot && hasApiKey);
+  spotCodeInputEl.disabled = !(isSpot && hasApiKey);
+  const hasCode = spotCodeInputEl.value.trim().length > 0;
+  if (spotRefreshGroupEl) {
+    spotRefreshGroupEl.hidden = !(isSpot && hasCode && hasApiKey);
+  }
+  if (spotRefreshButtonEl) {
+    spotRefreshButtonEl.disabled = !isSpot || !hasCode || !hasApiKey || spotRefreshInFlight || Date.now() < spotRefreshCooldownUntil;
+  }
 }
 
 function getParentCategoryName(category: CategoryNode): string {
@@ -1446,6 +1907,7 @@ function getGrowthToneClass(value: number | null): string {
 function renderModal(): string {
   if (modalState.kind === "none") return "";
   const currencySymbol = getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL;
+  const hasAlphaVantageApiKey = String(getSettingValue<string>("alphaVantageApiKey") || "").trim().length > 0;
 
   const categoryOptions = (excludeIds?: Set<string>, selectedId?: string | null) =>
     state.categories
@@ -1474,6 +1936,15 @@ function renderModal(): string {
                   <select class="form-select" name="currencySymbol">
                     ${CURRENCY_SYMBOL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt.value)}" ${((getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL) === opt.value) ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
                   </select>
+                </label>
+                <label class="form-label mb-0">
+                  Alpha Vantage API Key
+                  <input class="form-control" name="alphaVantageApiKey" autocomplete="off" value="${escapeHtml(getSettingValue<string>("alphaVantageApiKey") || "")}" />
+                  <span class="form-text">
+                    API key required to retrieve live spot pricing. Request one from
+                    <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener noreferrer">Alpha Vantage</a>.
+                    Free tier limits apply (about 1 request/second and 25 requests/day, shared across all symbols).
+                  </span>
                 </label>
                 <label class="form-check form-switch mb-0">
                   <input class="form-check-input" type="checkbox" name="darkMode" ${getSettingValue<boolean>("darkMode") ?? DEFAULT_DARK_MODE ? "checked" : ""} />
@@ -1544,8 +2015,23 @@ function renderModal(): string {
                 <span class="input-group-text">${escapeHtml(currencySymbol)}</span>
                 <input class="form-control" type="number" step="0.01" min="0" name="spotValue" value="${escapeHtml(moneyInputFromCents(category?.spotValueCents))}" ${category?.evaluationMode === "spot" ? "" : "disabled"} />
               </div>
+              ${editing
+                ? `<span data-spot-refresh-group ${category?.evaluationMode === "spot" && (category.spotCode || "").trim() && hasAlphaVantageApiKey ? "" : "hidden"}>
+                     <button
+                       type="button"
+                       class="baseline-value-link mt-1 small"
+                       data-action="refresh-spot-value"
+                       ${spotRefreshInFlight || Date.now() < spotRefreshCooldownUntil ? "disabled" : ""}
+                     >${spotRefreshInFlight ? "Getting latest spot value..." : "Get latest spot value"}</button>
+                     <span
+                       class="small text-body-secondary ms-2"
+                       data-role="spot-refresh-status"
+                       aria-live="polite"
+                     ></span>
+                   </span>`
+                : ""}
             </label>
-            <label class="form-label mb-0" data-spot-code-group ${category?.evaluationMode === "spot" ? "" : "hidden"}>
+            <label class="form-label mb-0" data-spot-code-group ${category?.evaluationMode === "spot" && hasAlphaVantageApiKey ? "" : "hidden"}>
               Code
               <input
                 class="form-control"
@@ -1553,7 +2039,7 @@ function renderModal(): string {
                 maxlength="64"
                 placeholder="e.g. XAGUSD"
                 value="${escapeHtml(category?.spotCode || "")}"
-                ${category?.evaluationMode === "spot" ? "" : "disabled"}
+                ${category?.evaluationMode === "spot" && hasAlphaVantageApiKey ? "" : "disabled"}
               />
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
@@ -1786,6 +2272,7 @@ function render() {
     }
   };
   visitCategory(null, 0);
+  const hasAlphaVantageApiKey = String(getSettingValue<string>("alphaVantageApiKey") || "").trim().length > 0;
 
   const categoriesRowsHtml = orderedCategoriesForTable
     .map(({ category: c, depth }) => `
@@ -1803,6 +2290,19 @@ function render() {
         }
         <td class="actions-col-cell">
           <div class="actions-cell">
+            ${
+              c.evaluationMode === "spot" && (c.spotCode || "").trim() && hasAlphaVantageApiKey
+                ? `<button
+                     type="button"
+                     class="btn btn-sm btn-outline-primary action-menu-btn"
+                     data-action="refresh-category-spot"
+                     data-id="${c.id}"
+                     title="Get latest spot price"
+                     aria-label="Get latest spot price"
+                     ${spotRefreshInFlight || Date.now() < spotRefreshCooldownUntil ? "disabled" : ""}
+                   >Spot</button><span class="actions-separator" aria-hidden="true">|</span>`
+                : ""
+            }
             <button type="button" class="btn btn-sm btn-outline-primary action-menu-btn" data-action="edit-category" data-id="${c.id}">Edit</button>
           </div>
         </td>
@@ -1933,6 +2433,7 @@ function render() {
             <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
           </div>
         </div>
+        ${marketsSpotMessage ? `<div class="alert alert-${marketsSpotMessage.tone} py-1 px-2 mb-2 small" role="status">${escapeHtml(marketsSpotMessage.text)}</div>` : ""}
         ${renderFilterChips(
           "categoriesList",
           "Markets",
@@ -2091,6 +2592,7 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const fd = new FormData(form);
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
+  const alphaVantageApiKey = String(fd.get("alphaVantageApiKey") || "").trim();
   const darkMode = fd.get("darkMode") === "on";
   const showMarketsGraphs = fd.get("showMarketsGraphs") === "on";
   if (!/^[A-Z]{3}$/.test(currencyCode)) {
@@ -2103,6 +2605,7 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   }
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
+  await putSetting("alphaVantageApiKey", alphaVantageApiKey);
   await putSetting("darkMode", darkMode);
   await putSetting("showMarketsGraphs", showMarketsGraphs);
   closeModal();
@@ -2624,6 +3127,12 @@ rootEl.addEventListener("click", async (event) => {
     }
     return;
   }
+  if (action === "refresh-spot-value") {
+    const form = actionEl.closest("form");
+    if (!(form instanceof HTMLFormElement) || form.id !== "category-form") return;
+    await handleSpotRefresh(form);
+    return;
+  }
   if (action === "toggle-growth-children") {
     const marketId = actionEl.dataset.marketId;
     if (!marketId) return;
@@ -2638,6 +3147,11 @@ rootEl.addEventListener("click", async (event) => {
   if (action === "edit-category") {
     const id = actionEl.dataset.id;
     if (id) openModal({ kind: "categoryEdit", categoryId: id });
+    return;
+  }
+  if (action === "refresh-category-spot") {
+    const id = actionEl.dataset.id;
+    if (id) await handleCategorySpotRefresh(id);
     return;
   }
   if (action === "edit-inventory") {
@@ -2743,6 +3257,12 @@ rootEl.addEventListener("submit", async (event) => {
 rootEl.addEventListener("input", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) return;
+  if (target.name === "spotCode") {
+    const form = target.closest("form");
+    if (form instanceof HTMLFormElement && form.id === "category-form") {
+      syncCategoryEvaluationFields(form);
+    }
+  }
   if (target.name === "quantity" || target.name === "totalPrice") {
     const form = target.closest("form");
     if (form instanceof HTMLFormElement && form.id === "inventory-form") {
