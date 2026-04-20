@@ -49,7 +49,7 @@
                   <span class="form-text">
                     API key required to retrieve live spot pricing. Request one from
                     <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener noreferrer">Alpha Vantage</a>.
-                    Free tier limits apply (about 1 request/second and 25 requests/day, shared across all symbols).
+                    Free plan limit: 1 request/second, 25 requests/day.
                   </span>
                 </label>
                 <label class="form-check form-switch mb-0">
