@@ -3006,16 +3006,22 @@ async function handleReplaceImport() {
 }
 
 async function applyDefaultMarketsTemplate() {
-  const categories = recomputeCategoryPaths(DEFAULT_MARKETS_IMPORT_BUNDLE.categories.map(normalizeImportedCategory));
-  const settings = DEFAULT_MARKETS_IMPORT_BUNDLE.settings.map((s) => ({ key: String(s.key), value: s.value }));
-  const confirmed = window.confirm(
-    "Load default markets template and replace all existing data? This will keep no investments.",
-  );
-  if (!confirmed) return;
-  await replaceAllData({ purchases: [], categories, settings });
-  setState({ filters: createDefaultActiveFilters(), importText: DEFAULT_MARKETS_IMPORT_TEXT });
-  await reloadData();
-  setToast({ tone: "success", text: "Default markets loaded." });
+  try {
+    const categories = recomputeCategoryPaths(DEFAULT_MARKETS_IMPORT_BUNDLE.categories.map(normalizeImportedCategory));
+    const settings = DEFAULT_MARKETS_IMPORT_BUNDLE.settings.map((s) => ({ key: String(s.key), value: s.value }));
+    const confirmed = window.confirm(
+      "Load default markets template and replace all existing data? This will keep no investments.",
+    );
+    if (!confirmed) return;
+    await replaceAllData({ purchases: [], categories, settings });
+    setState({ filters: createDefaultActiveFilters(), importText: DEFAULT_MARKETS_IMPORT_TEXT });
+    await reloadData();
+    setToast({ tone: "success", text: "Default markets loaded." });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load default markets.";
+    alert(message);
+    setToast({ tone: "danger", text: "Default markets failed to load." });
+  }
 }
 
 function getEventTargetElement(event: Event): HTMLElement | null {
