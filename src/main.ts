@@ -2044,7 +2044,8 @@ function renderModal(): string {
             <h2 id="modal-title-category" class="modal-title fs-5">${editing ? "Edit Market" : "Create Market"}</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
-          <form id="category-form" class="modal-body d-grid gap-3">
+          <form id="category-form">
+            <div class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="${editing ? "edit" : "create"}" />
             <input type="hidden" name="categoryId" value="${escapeHtml(category?.id || "")}" />
             <label class="form-label mb-0">Name<input class="form-control" name="name" required value="${escapeHtml(category?.name || "")}" /></label>
@@ -2124,7 +2125,8 @@ function renderModal(): string {
                 }
               </div>
             ` : ""}
-            <div class="modal-footer px-0 pb-0">
+            </div>
+            <div class="modal-footer">
               ${editing && category ? `<button type="button" class="btn btn-danger me-auto" data-action="delete-category-record" data-id="${category.id}">Delete</button>` : ""}
               <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">${editing ? "Save" : "Create"}</button>
@@ -2145,7 +2147,8 @@ function renderModal(): string {
             <h2 id="modal-title-purchase" class="modal-title fs-5">Create Investment Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
-          <form id="inventory-form" class="modal-body d-grid gap-3">
+          <form id="inventory-form">
+            <div class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="create" />
             <input type="hidden" name="inventoryId" value="" />
             <input type="hidden" name="baselineValue" value="" />
@@ -2178,7 +2181,8 @@ function renderModal(): string {
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" checked /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3"></textarea></label>
-            <div class="modal-footer px-0 pb-0">
+            </div>
+            <div class="modal-footer">
               <button type="button" class="btn btn-secondary modal-cancel-btn" data-action="close-modal">Cancel</button>
               <button type="submit" class="btn btn-primary">Create</button>
             </div>
@@ -2201,7 +2205,8 @@ function renderModal(): string {
             <h2 id="modal-title-purchase" class="modal-title fs-5">Edit Investment Record</h2>
             <button type="button" class="btn-close" aria-label="Close" data-action="close-modal"></button>
           </div>
-          <form id="inventory-form" class="modal-body d-grid gap-3">
+          <form id="inventory-form">
+            <div class="modal-body d-grid gap-3">
             <input type="hidden" name="mode" value="edit" />
             <input type="hidden" name="inventoryId" value="${escapeHtml(purchase.id)}" />
             <input type="hidden" name="baselineValue" value="${escapeHtml(moneyInputFromCents(purchase.baselineValueCents))}" />
@@ -2236,7 +2241,8 @@ function renderModal(): string {
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${purchase.active ? "checked" : ""} /> <span class="form-check-label">Active (counts in totals)</span></label>
             <label class="form-label mb-0">Notes (optional)<textarea class="form-control" name="notes" rows="3">${escapeHtml(purchase.notes || "")}</textarea></label>
-            <div class="modal-footer px-0 pb-0">
+            </div>
+            <div class="modal-footer">
               <div class="d-flex gap-2 me-auto">
                 <button type="button" class="btn btn-danger" data-action="delete-inventory-record" data-id="${purchase.id}">Delete</button>
               </div>
@@ -2514,14 +2520,13 @@ function render() {
       </section>
 
       <details class="card shadow-sm details-card" data-filter-section="investments" data-section="investments" data-filter-section-view-id="inventoryTable" ${investmentsOpen ? "open" : ""}>
-        <summary class="card-header">Investments</summary>
-        <div class="details-content card-body">
-          <div class="section-head">
-            <h2 class="h5 mb-0">Investments</h2>
-            <div class="d-flex align-items-center gap-2 justify-content-end">
-              <button type="button" class="btn btn-sm btn-primary" data-action="open-create-inventory">Create New</button>
-            </div>
+        <summary class="card-header section-head">
+          <h2 class="h5 mb-0">Investments</h2>
+          <div class="d-flex align-items-center gap-2 justify-content-end">
+            <button type="button" class="btn btn-sm btn-primary" data-action="open-create-inventory">Create New</button>
           </div>
+        </summary>
+        <div class="details-content card-body">
           ${renderFilterChips(
             "inventoryTable",
             "Investments",
@@ -2545,7 +2550,9 @@ function render() {
       </details>
 
       <details class="card shadow-sm details-card" data-section="data-tools" ${dataToolsOpen ? "open" : ""}>
-        <summary class="card-header">Data Tools</summary>
+        <summary class="card-header section-head">
+          <h2 class="h5 mb-0">Data Tools</h2>
+        </summary>
         <div class="details-content card-body">
         <div class="small text-body-secondary mb-3">
           Storage used (browser estimate): ${
@@ -3107,6 +3114,10 @@ rootEl.addEventListener("click", async (event) => {
   if (!actionEl) return;
   const action = actionEl.dataset.action;
   if (!action) return;
+  if (actionEl.closest("summary")) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
 
   if (action === "add-filter") {
     if (!target.closest(".filter-hit")) return;

@@ -22,6 +22,9 @@
   --row-inactive-color: rgba(65, 53, 40, 0.55);
   --row-archived-bg: rgba(124, 103, 77, 0.1);
   --data-tool-bg: rgba(127, 108, 82, 0.12);
+  --panel-surface-bg: rgba(255, 251, 243, 0.9);
+  --panel-chrome-bg: rgba(247, 240, 229, 0.96);
+  --panel-border-color: rgba(127, 108, 82, 0.2);
   --bs-link-color: #0b4c92;
   --bs-link-color-rgb: 11, 76, 146;
   --bs-link-hover-color: #083b73;
@@ -44,6 +47,9 @@
   --row-inactive-color: rgba(241, 246, 255, 0.52);
   --row-archived-bg: rgba(138, 121, 97, 0.16);
   --data-tool-bg: rgba(147, 129, 103, 0.16);
+  --panel-surface-bg: rgba(37, 31, 26, 0.88);
+  --panel-chrome-bg: rgba(44, 37, 31, 0.96);
+  --panel-border-color: rgba(147, 129, 103, 0.28);
   --bs-link-color: #7fb8ff;
   --bs-link-color-rgb: 127, 184, 255;
   --bs-link-hover-color: #5fa6ff;
@@ -136,6 +142,33 @@ body {
   box-shadow: var(--hedgee-card-shadow) !important;
   border-radius: 0.9rem;
   backdrop-filter: blur(4px);
+}
+
+:root[data-app-theme="classic"] section.card.shadow-sm,
+:root[data-app-theme="classic"] details.card.shadow-sm {
+  border-radius: 0.9rem;
+  overflow: hidden;
+}
+
+:root[data-app-theme="classic"] section.card.shadow-sm > .card-body,
+:root[data-app-theme="classic"] details.card.shadow-sm > summary.card-header,
+:root[data-app-theme="classic"] details.card.shadow-sm > .details-content.card-body {
+  background: var(--panel-surface-bg);
+}
+
+:root[data-app-theme="classic"] .modal-panel {
+  background: var(--panel-surface-bg);
+  border-color: var(--panel-border-color);
+}
+
+:root[data-app-theme="classic"] .modal-panel .modal-header,
+:root[data-app-theme="classic"] .modal-panel .modal-footer {
+  background: var(--panel-chrome-bg);
+  border-color: var(--panel-border-color);
+}
+
+:root[data-app-theme="classic"] .modal-panel .modal-body {
+  background: var(--panel-surface-bg);
 }
 
 :root[data-app-theme="classic"][data-bs-theme="dark"] .card {
@@ -382,6 +415,15 @@ body {
   flex-wrap: nowrap;
   gap: 0.75rem;
   padding-bottom: 0.5rem;
+}
+
+section.card.shadow-sm > .card-body > .section-head {
+  padding-bottom: 0.8rem;
+}
+
+section.card.shadow-sm > .card-body {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
 }
 
 .section-head > .d-flex {
@@ -859,6 +901,32 @@ body {
 .details-card > summary {
   cursor: pointer;
   list-style: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.2rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  padding-left: 0;
+  padding-right: 1rem;
+  border-bottom: 0 !important;
+}
+
+.details-card > summary::before {
+  content: "▾";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.9rem;
+  min-width: 1.9rem;
+  margin-right: 0;
+  line-height: 1;
+  color: var(--bs-secondary-color);
+  transition: transform 0.15s ease;
+}
+
+.details-card:not([open]) > summary::before {
+  transform: rotate(-90deg);
 }
 
 @media (max-width: 767.98px) {
@@ -900,7 +968,7 @@ body {
 }
 
 .details-content {
-  border-top: 1px solid var(--bs-border-color);
+  border-top: 0;
 }
 
 .modal.fade.show.d-block {
