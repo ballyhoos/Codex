@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ballyhoos.github.io/Codex/sitemap.xml
