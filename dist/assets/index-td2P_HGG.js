@@ -317,9 +317,9 @@
             <h2 class="h5 mb-0">Growth Report</h2>
           </div>
           ${v?`
-            <div class="markets-widget-grid mb-0">
+            <div class="markets-widget-grid mb-2">
               <article class="markets-widget-card card border-0">
-                <div class="card-body p-0 p-md-1">
+                <div class="card-body p-0">
                   <div class="markets-chart-frame">
                     <div id="markets-top-chart" class="markets-chart-canvas" role="img" aria-label="Top markets by value chart"></div>
                     <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-top-chart" hidden></p>
@@ -327,7 +327,7 @@
                 </div>
               </article>
               <article class="markets-widget-card card border-0">
-                <div class="card-body p-0 p-md-1">
+                <div class="card-body p-0">
                   <div class="markets-chart-frame">
                     <div id="markets-allocation-chart" class="markets-chart-canvas" role="img" aria-label="Market allocation chart"></div>
                     <p class="markets-chart-empty text-body-secondary small mb-0" data-chart-empty-for="markets-allocation-chart" hidden></p>
