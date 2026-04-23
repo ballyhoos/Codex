@@ -40,7 +40,7 @@ type ModalState =
   | { kind: "categoryEdit"; categoryId: string }
   | { kind: "inventoryCreate" }
   | { kind: "inventoryEdit"; inventoryId: string };
-type ThemeId = "classic" | "hedgee-fintech";
+type ThemeId = "classic";
 
 let modalState: ModalState = { kind: "none" };
 let lastFocusedBeforeModal: HTMLElement | null = null;
@@ -261,13 +261,8 @@ const CURRENCY_SYMBOL_OPTIONS = [
   { value: "₱", label: "Peso (₱)" },
   { value: "₴", label: "Hryvnia (₴)" },
 ];
-const THEME_OPTIONS: Array<{ value: ThemeId; label: string }> = [
-  { value: "classic", label: "Classic" },
-  { value: "hedgee-fintech", label: "Hedgee Fintech" },
-];
-
 function isSupportedThemeId(value: unknown): value is ThemeId {
-  return value === "classic" || value === "hedgee-fintech";
+  return value === "classic";
 }
 
 function normalizeThemeId(value: unknown): ThemeId {
@@ -449,32 +444,55 @@ function pickNumericByPath(entries: Array<{ path: string; value: number }>, toke
   return entries[0]?.value ?? null;
 }
 
+function isAlphaVantageRateLimitMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("rate limit") ||
+    m.includes("our standard api call frequency is") ||
+    m.includes("please consider optimizing your api call frequency") ||
+    m.includes("please consider spreading out your free api requests") ||
+    m.includes("1 request per second") ||
+    m.includes("25 requests per day")
+  );
+}
+
 async function fetchAlphaVantagePayload(params: Record<string, string>, apiKey: string): Promise<Record<string, unknown>> {
-  const now = Date.now();
-  const waitMs = Math.max(0, alphaVantageLastRequestAt + ALPHA_VANTAGE_MIN_REQUEST_GAP_MS - now);
-  if (waitMs > 0) {
-    await new Promise((resolve) => window.setTimeout(resolve, waitMs));
-  }
   const url = new URL("https://www.alphavantage.co/query");
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
   url.searchParams.set("apikey", apiKey);
 
-  alphaVantageLastRequestAt = Date.now();
-  const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`Request failed (${res.status}).`);
-  const data = await res.json() as Record<string, unknown>;
-  const note = typeof data.Note === "string" ? data.Note : typeof data.Information === "string" ? data.Information : null;
-  if (note) {
-    const n = note.toLowerCase();
-    if (n.includes("per second") || n.includes("rate limit") || n.includes("25 requests per day")) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const now = Date.now();
+    const waitMs = Math.max(0, alphaVantageLastRequestAt + ALPHA_VANTAGE_MIN_REQUEST_GAP_MS - now);
+    if (waitMs > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, waitMs));
+    }
+
+    alphaVantageLastRequestAt = Date.now();
+    const res = await fetch(url.toString());
+    if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+    const data = await res.json() as Record<string, unknown>;
+    if (typeof data["Error Message"] === "string") throw new Error(String(data["Error Message"]));
+
+    const note = typeof data.Note === "string" ? data.Note : null;
+    const information = typeof data.Information === "string" ? data.Information : null;
+    const limitMessage = note || information;
+    if (limitMessage && isAlphaVantageRateLimitMessage(limitMessage)) {
+      if (attempt === 0) {
+        // Occasionally the first response can be a transient limit advisory; retry once.
+        await new Promise((resolve) => window.setTimeout(resolve, ALPHA_VANTAGE_MIN_REQUEST_GAP_MS + 200));
+        continue;
+      }
       throw new Error("Alpha Vantage limit reached. Please wait and retry (free tier: 1 req/sec, 25/day).");
     }
-    throw new Error(note);
+
+    if (note) throw new Error(note);
+    return data;
   }
-  if (typeof data["Error Message"] === "string") throw new Error(String(data["Error Message"]));
-  return data;
+
+  throw new Error("Alpha Vantage request failed.");
 }
 
 function extractFxRate(payload: Record<string, unknown>): number | null {
@@ -1058,15 +1076,12 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
 
   const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
   const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
-  const appTheme = normalizeThemeId(document.documentElement.getAttribute("data-app-theme"));
   const chartFontSize = isMobile ? 12 : 14;
-  const palette = appTheme === "hedgee-fintech"
-    ? ["#135dff", "#00b894", "#14b8ff", "#ffb020", "#f15a5a", "#6658ff", "#27c77b", "#ff8f3d"]
-    : ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
-  const colorPositive = appTheme === "hedgee-fintech" ? "#00b894" : "#20c997";
-  const colorNegative = appTheme === "hedgee-fintech" ? "#f15a5a" : "#dc3545";
-  const colorFlat = appTheme === "hedgee-fintech" ? "#14b8ff" : "#0dcaf0";
-  const barBackground = appTheme === "hedgee-fintech" ? "rgba(19, 93, 255, 0.12)" : "rgba(108, 117, 125, 0.1)";
+  const palette = ["#3f6d49", "#7f6c52", "#5a4027", "#f2b544", "#dc3545", "#6f42c1", "#20c997", "#0b4c92"];
+  const colorPositive = "#20c997";
+  const colorNegative = "#dc3545";
+  const colorFlat = "#0b4c92";
+  const barBackground = "rgba(108, 117, 125, 0.1)";
   const chartTextColor = isDarkTheme ? "#e9ecef" : "#212529";
   const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
   const valueLabelColor = isDarkTheme ? "#f8f9fa" : "#212529";
@@ -1676,6 +1691,7 @@ function getDerived() {
 
 function renderFilterChips(viewId: ViewId, title: string, rightSideHtml = "") {
   const chips = state.filters.filter((f) => f.viewId === viewId);
+  const showRemoveGlyph = true;
   return `
     <div class="chips-wrap mb-2">
       ${chips.length ? `
@@ -1692,7 +1708,9 @@ function renderFilterChips(viewId: ViewId, title: string, rightSideHtml = "") {
                   aria-label="Remove filter: ${escapeHtml(chip.label)}"
                   data-action="remove-filter"
                   data-filter-id="${chip.id}"
-                >${escapeHtml(chip.label)}</button>
+                >
+                  <span class="breadcrumb-filter-text">${escapeHtml(chip.label)}</span>${showRemoveGlyph ? '<span class="breadcrumb-filter-remove ms-1" aria-hidden="true">×</span>' : ""}
+                </button>
               </li>
             `).join("")}
           </ol>
@@ -1969,12 +1987,6 @@ function renderModal(): string {
                   Currency symbol
                   <select class="form-select" name="currencySymbol">
                     ${CURRENCY_SYMBOL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt.value)}" ${((getSettingValue<string>("currencySymbol") || DEFAULT_CURRENCY_SYMBOL) === opt.value) ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
-                  </select>
-                </label>
-                <label class="form-label mb-0">
-                  Theme
-                  <select class="form-select" name="themeId">
-                    ${THEME_OPTIONS.map((opt) => `<option value="${opt.value}" ${normalizeThemeId(getSettingValue<string>("themeId")) === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
                   </select>
                 </label>
                 <label class="form-label mb-0">
@@ -2262,8 +2274,15 @@ function render() {
     filteredInventoryRecords,
     filteredCategories,
   } = getDerived();
+  const appTitle = "Investments";
+  const appSubtitle = "Maintain your investments locally with fast filtering, category tracking, and clear totals.";
+  const settingsButtonLabel = "Edit settings";
   const report = buildGrowthReportRows(categoryDescendantsMap);
   const marketWidgetData = buildMarketWidgetData(report.rows);
+  const growthFilterChips = state.filters.filter((f) => f.viewId === "categoriesList");
+  const growthFilterText = growthFilterChips.length
+    ? growthFilterChips.map((chip) => chip.label).join(" > ")
+    : "No filters";
   const showMarketsGraphs = getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS;
   const hasTopLevelMarkets = filteredCategories.some((category) => category.parentId == null);
   const showMarketsGraphsSection = showMarketsGraphs && hasTopLevelMarkets && marketWidgetData.length > 0;
@@ -2355,11 +2374,11 @@ function render() {
       <header class="page-header mb-2">
         <div class="section-head">
           <div>
-            <h1 class="display-6 mb-1">Investments</h1>
-            <p class="text-body-secondary mb-0">Maintain your investments locally with fast filtering, category tracking, and clear totals.</p>
+            <h1 class="display-6 mb-1">${escapeHtml(appTitle)}</h1>
+            <p class="text-body-secondary mb-0">${escapeHtml(appSubtitle)}</p>
           </div>
           <div class="d-flex align-items-center gap-2">
-            <button type="button" class="header-indicator-btn btn btn-outline-primary btn-sm" data-action="open-settings" aria-label="Edit settings">Edit settings</button>
+            <button type="button" class="header-indicator-btn btn btn-primary btn-sm" data-action="open-settings" aria-label="${escapeHtml(settingsButtonLabel)}">${escapeHtml(settingsButtonLabel)}</button>
           </div>
         </div>
         ${toastState ? `<div class="alert alert-${toastState.tone} py-1 px-2 mt-2 mb-0 small" role="status">${escapeHtml(toastState.text)}</div>` : ""}
@@ -2390,9 +2409,7 @@ function render() {
               </article>
             </div>
           ` : ""}
-          <p class="small text-body-secondary mb-2">
-            Scope: ${report.scopeMarketIds.length ? `${report.scopeMarketIds.length} market${report.scopeMarketIds.length === 1 ? "" : "s"} (Markets filter)` : "No scoped markets"}
-          </p>
+          <p class="small text-body-secondary mb-2">Filter: ${escapeHtml(growthFilterText)}</p>
           ${report.rows.length === 0 ? `
             <p class="mb-0 text-body-secondary">${
               "No growth data available for this scope."
@@ -2635,7 +2652,6 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const fd = new FormData(form);
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
-  const themeId = normalizeThemeId(String(fd.get("themeId") || DEFAULT_THEME_ID).trim());
   const alphaVantageApiKey = String(fd.get("alphaVantageApiKey") || "").trim();
   const darkMode = fd.get("darkMode") === "on";
   const showMarketsGraphs = fd.get("showMarketsGraphs") === "on";
@@ -2649,7 +2665,6 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   }
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
-  await putSetting("themeId", themeId);
   await putSetting("alphaVantageApiKey", alphaVantageApiKey);
   await putSetting("darkMode", darkMode);
   await putSetting("showMarketsGraphs", showMarketsGraphs);
