@@ -40,6 +40,7 @@ type ModalState =
   | { kind: "categoryEdit"; categoryId: string }
   | { kind: "inventoryCreate" }
   | { kind: "inventoryEdit"; inventoryId: string };
+type ThemeId = "classic" | "hedgee-fintech";
 
 let modalState: ModalState = { kind: "none" };
 let lastFocusedBeforeModal: HTMLElement | null = null;
@@ -94,6 +95,7 @@ const DEFAULT_MARKETS_IMPORT_BUNDLE: ExportBundleV2 = {
   settings: [
     { key: "currencyCode", value: "USD" },
     { key: "currencySymbol", value: "$" },
+    { key: "themeId", value: "classic" },
     { key: "darkMode", value: false },
     { key: "showGrowthGraph", value: false },
     { key: "showMarketsGraphs", value: true },
@@ -240,6 +242,7 @@ let state: AppState = {
 
 const DEFAULT_CURRENCY = "USD";
 const DEFAULT_CURRENCY_SYMBOL = "$";
+const DEFAULT_THEME_ID: ThemeId = "classic";
 const DEFAULT_DARK_MODE = false;
 const DEFAULT_SHOW_MARKETS_GRAPHS = true;
 const SPOT_REFRESH_COOLDOWN_MS = 15_000;
@@ -258,6 +261,18 @@ const CURRENCY_SYMBOL_OPTIONS = [
   { value: "₱", label: "Peso (₱)" },
   { value: "₴", label: "Hryvnia (₴)" },
 ];
+const THEME_OPTIONS: Array<{ value: ThemeId; label: string }> = [
+  { value: "classic", label: "Classic" },
+  { value: "hedgee-fintech", label: "Hedgee Fintech" },
+];
+
+function isSupportedThemeId(value: unknown): value is ThemeId {
+  return value === "classic" || value === "hedgee-fintech";
+}
+
+function normalizeThemeId(value: unknown): ThemeId {
+  return isSupportedThemeId(value) ? value : DEFAULT_THEME_ID;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -544,7 +559,10 @@ function getSettingValue<T = unknown>(key: string): T | undefined {
 function applyThemeFromSettings(settings: AppSetting[]) {
   const darkModeSetting = settings.find((s) => s.key === "darkMode")?.value;
   const isDark = typeof darkModeSetting === "boolean" ? darkModeSetting : DEFAULT_DARK_MODE;
+  const themeSetting = settings.find((s) => s.key === "themeId")?.value;
+  const themeId = normalizeThemeId(themeSetting);
   document.documentElement.setAttribute("data-bs-theme", isDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-app-theme", themeId);
 }
 
 function setState(next: Partial<AppState>) {
@@ -1040,8 +1058,15 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
 
   const isMobile = window.matchMedia("(max-width: 767.98px)").matches;
   const isDarkTheme = document.documentElement.getAttribute("data-bs-theme") === "dark";
+  const appTheme = normalizeThemeId(document.documentElement.getAttribute("data-app-theme"));
   const chartFontSize = isMobile ? 12 : 14;
-  const palette = ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
+  const palette = appTheme === "hedgee-fintech"
+    ? ["#135dff", "#00b894", "#14b8ff", "#ffb020", "#f15a5a", "#6658ff", "#27c77b", "#ff8f3d"]
+    : ["#0d6efd", "#20c997", "#ffc107", "#fd7e14", "#6f42c1", "#198754", "#0dcaf0", "#dc3545"];
+  const colorPositive = appTheme === "hedgee-fintech" ? "#00b894" : "#20c997";
+  const colorNegative = appTheme === "hedgee-fintech" ? "#f15a5a" : "#dc3545";
+  const colorFlat = appTheme === "hedgee-fintech" ? "#14b8ff" : "#0dcaf0";
+  const barBackground = appTheme === "hedgee-fintech" ? "rgba(19, 93, 255, 0.12)" : "rgba(108, 117, 125, 0.1)";
   const chartTextColor = isDarkTheme ? "#e9ecef" : "#212529";
   const mutedTextColor = isDarkTheme ? "#ced4da" : "#495057";
   const valueLabelColor = isDarkTheme ? "#f8f9fa" : "#212529";
@@ -1134,7 +1159,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
   });
 
   marketsTopChart.setOption({
-    color: ["#20c997"],
+    color: [colorPositive],
     grid: {
       left: "4%",
       right: "10%",
@@ -1184,10 +1209,10 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
           itemStyle: {
             color:
               row.changeCents > 0
-                ? "#20c997"
+                ? colorPositive
                 : row.changeCents < 0
-                  ? "#dc3545"
-                  : "#0dcaf0",
+                  ? colorNegative
+                  : colorFlat,
           },
         })),
         barWidth: 30,
@@ -1195,7 +1220,7 @@ function initMarketCharts(widgetData: MarketWidgetDatum[]) {
         barGap: "0%",
         showBackground: true,
         backgroundStyle: {
-          color: "rgba(108, 117, 125, 0.1)",
+          color: barBackground,
         },
         label: {
           show: true,
@@ -1269,6 +1294,15 @@ async function reloadData() {
   if (!settings.some((s) => s.key === "darkMode")) {
     await putSetting("darkMode", DEFAULT_DARK_MODE);
     settings.push({ key: "darkMode", value: DEFAULT_DARK_MODE });
+  }
+  const rawThemeSetting = settings.find((s) => s.key === "themeId");
+  const normalizedThemeId = normalizeThemeId(rawThemeSetting?.value);
+  if (!rawThemeSetting) {
+    await putSetting("themeId", normalizedThemeId);
+    settings.push({ key: "themeId", value: normalizedThemeId });
+  } else if (rawThemeSetting.value !== normalizedThemeId) {
+    await putSetting("themeId", normalizedThemeId);
+    rawThemeSetting.value = normalizedThemeId;
   }
   if (!settings.some((s) => s.key === "showMarketsGraphs")) {
     await putSetting("showMarketsGraphs", DEFAULT_SHOW_MARKETS_GRAPHS);
@@ -1938,6 +1972,12 @@ function renderModal(): string {
                   </select>
                 </label>
                 <label class="form-label mb-0">
+                  Theme
+                  <select class="form-select" name="themeId">
+                    ${THEME_OPTIONS.map((opt) => `<option value="${opt.value}" ${normalizeThemeId(getSettingValue<string>("themeId")) === opt.value ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}
+                  </select>
+                </label>
+                <label class="form-label mb-0">
                   Alpha Vantage API Key
                   <input class="form-control" name="alphaVantageApiKey" autocomplete="off" value="${escapeHtml(getSettingValue<string>("alphaVantageApiKey") || "")}" />
                   <span class="form-text">
@@ -2595,6 +2635,7 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const fd = new FormData(form);
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
+  const themeId = normalizeThemeId(String(fd.get("themeId") || DEFAULT_THEME_ID).trim());
   const alphaVantageApiKey = String(fd.get("alphaVantageApiKey") || "").trim();
   const darkMode = fd.get("darkMode") === "on";
   const showMarketsGraphs = fd.get("showMarketsGraphs") === "on";
@@ -2608,6 +2649,7 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   }
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
+  await putSetting("themeId", themeId);
   await putSetting("alphaVantageApiKey", alphaVantageApiKey);
   await putSetting("darkMode", darkMode);
   await putSetting("showMarketsGraphs", showMarketsGraphs);
@@ -2921,10 +2963,14 @@ async function handleReplaceImport() {
       }
     }
     const settings: AppSetting[] = Array.isArray(parsed.settings)
-      ? parsed.settings.map((s: any) => ({ key: String(s.key), value: s.value }))
+      ? parsed.settings.map((s: any) => ({
+        key: String(s.key),
+        value: String(s.key) === "themeId" ? normalizeThemeId(s.value) : s.value,
+      }))
       : [
         { key: "currencyCode", value: DEFAULT_CURRENCY },
         { key: "currencySymbol", value: DEFAULT_CURRENCY_SYMBOL },
+        { key: "themeId", value: DEFAULT_THEME_ID },
         { key: "darkMode", value: DEFAULT_DARK_MODE },
       ];
     const confirmed = window.confirm("Replace all existing data with imported data? This cannot be undone.");
