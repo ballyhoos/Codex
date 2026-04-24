@@ -1,13 +1,14 @@
 ## Project Context (Read First)
 
-This repository contains a **local-only front-end SPA** for tracking purchases of investment products.
+This repository contains **Squirrl**, a local-only front-end SPA for tracking personal investments.
 
 ### What the app is
 
 - Desktop-first single-page application (SPA)
-- Pure front-end (no backend API, no server-side DB)
+- Pure front-end with no backend API and no server-side database
 - User data is stored in browser **IndexedDB** only
-- Supports categories/subcategories, purchases, filtering, export/import, and full data wipe
+- Tracks nested Markets and Investment records
+- Supports filtering, local totals/growth views, JSON export/import, and full data wipe
 
 ### Technology (current)
 
@@ -15,46 +16,69 @@ This repository contains a **local-only front-end SPA** for tracking purchases o
 - `TypeScript`
 - `Vanilla JS` (ES modules; no React/Vue)
 - `idb` for IndexedDB access
+- `Bootstrap 5` via CDN
+- `DataTables` via jQuery plugin mode
+- `ECharts` via CDN for charts/widgets
 
 ### Key product rules (do not break without explicit request)
 
 1. Privacy/storage
-- All purchase/category/settings data stays local in IndexedDB.
+- All investment, market, and settings data stays local in IndexedDB.
 - No app data should be sent to a server.
+- External network requests are limited to user-triggered spot-price lookups and CDN assets.
 
-2. Purchase status flags
-- `active=false` means record exists but is excluded from totals.
-- `archived=true` means soft-deleted/hidden by default.
+2. Record status flags
+- Investment `active=false` means the record still exists but is excluded from totals/growth calculations.
+- Investment `archived=true` means soft-hidden from normal views and excluded from totals.
+- Market `active=false` is primarily a visual/status flag and does not automatically deactivate linked investments.
+- Market `isArchived=true` means hidden by default.
 
 3. Totals behavior
-- Category totals must reflect the **current purchase-table filters**.
-- Totals must exclude purchases that are inactive or archived.
+- Market totals and counts should exclude inactive or archived investment records.
+- Market table totals should remain stable and should not collapse to zero just because the Investments table is filtered.
+- Growth rows must respect current market hierarchy and roll child values into parents.
 
 4. Filtering behavior
-- Every visible data field/column in list/table views should be filterable.
+- Every visible data field/column in list/table views should be filterable unless explicitly excluded.
 - Clicking a displayed value adds a filter chip.
-- Filters are view-scoped (e.g., purchases table vs categories list).
+- Filters are view-scoped (for example `categoriesList` vs `inventoryTable`).
 - Filter combination semantics are `AND`.
+- Default filters currently bias toward active records.
 
 5. Delete behavior
-- Normal record deletion is handled via archive/restore (soft delete).
-- Hard delete is reserved for the explicit global “wipe all data” action.
+- Markets and investments can now be hard-deleted from edit flows when explicitly requested by the user.
+- Global wipe is still the destructive reset for clearing the whole app.
+- When deleting a Market, linked investments may need to be unlinked rather than deleted.
 
 ### Data model summary (current)
 
-`PurchaseRecord` includes:
-- pricing fields (`totalPriceCents`, `unitPriceCents`)
+`InventoryRecord` includes:
+- `purchaseDate`
+- `productName`
+- `quantity`
+- `totalPriceCents`
+- `baselineValueCents`
+- `unitPriceCents`
+- `unitPriceSource`
 - `categoryId`
 - `active`
 - `archived`
-- timestamps
+- timestamps and optional notes
 
 `CategoryNode` includes:
-- tree structure (`parentId`, `pathIds`, `pathNames`, `depth`)
+- tree structure (`parentId`, `pathIds`, `pathNames`, `depth`, `sortOrder`)
+- optional valuation metadata (`evaluationMode`, `spotValueCents`, `spotCode`)
+- `active`
 - `isArchived`
 - timestamps
 
-`settings` store includes key/value records (currently app-wide `currencyCode`)
+`settings` store includes key/value records such as:
+- `currencyCode`
+- `currencySymbol`
+- `darkMode`
+- `showMarketsGraphs`
+- `showGrowthGraph`
+- `alphaVantageApiKey`
 
 ### IndexedDB schema (current)
 
@@ -64,82 +88,115 @@ Stores:
 - `inventory`
 - `categories`
 - `settings`
-- `valuationSnapshots`
 
 Important indexes:
 - inventory: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
 - categories: `by_parentId`, `by_name`, `by_isArchived`
-- valuationSnapshots: `by_capturedAt`, `by_scope`, `by_marketId`, `by_marketId_capturedAt`
+
+Notes:
+- The legacy `purchases` store is still migrated into `inventory` if found.
+- There is **no current `valuationSnapshots` store** in the live schema.
 
 ### Key files (current implementation)
 
-- `/Users/me/Work/AI/Codex/src/main.ts` - UI rendering, form handling, actions, import/export/wipe
-- `/Users/me/Work/AI/Codex/src/db.ts` - IndexedDB schema + CRUD + replace-all/wipe
-- `/Users/me/Work/AI/Codex/src/types.ts` - shared interfaces/types
-- `/Users/me/Work/AI/Codex/src/filters.ts` - filter helpers and generic view filtering
-- `/Users/me/Work/AI/Codex/src/totals.ts` - category descendants/path/totals logic
-- `/Users/me/Work/AI/Codex/src/styles.css` - styles
+- [src/main.ts](/Users/me/Work/AI/Codex/src/main.ts) - UI rendering, forms, actions, DataTables setup, charts, settings, import/export
+- [src/db.ts](/Users/me/Work/AI/Codex/src/db.ts) - IndexedDB schema, migrations, CRUD, replace-all, wipe
+- [src/types.ts](/Users/me/Work/AI/Codex/src/types.ts) - shared interfaces/types
+- [src/filters.ts](/Users/me/Work/AI/Codex/src/filters.ts) - filter helpers and generic view filtering
+- [src/totals.ts](/Users/me/Work/AI/Codex/src/totals.ts) - hierarchy/path/totals helpers
+- [src/styles.css](/Users/me/Work/AI/Codex/src/styles.css) - theme, layout, DataTable, modal, and chart styles
+- [index.html](/Users/me/Work/AI/Codex/index.html) - SEO/meta tags, CDN assets, favicon links, version token placeholders
+- [vite.config.ts](/Users/me/Work/AI/Codex/vite.config.ts) - injects build version into HTML
 
 ### Change conventions for future AI edits
 
-- Preserve local-only architecture unless the user explicitly requests backend/networked changes.
-- When adding a visible column to a list/table, update the table `ColumnDef` metadata so it is filterable.
-- Keep action columns (`Edit`, `Archive`, etc.) non-filterable unless explicitly requested.
-- If changing totals behavior, confirm whether totals should still reflect current purchase filters.
-- Prefer schema migrations/backfills in `src/db.ts` over breaking old local data.
-- Keep import/export backward-compatible when possible (default missing flags like `active`, `archived`, `isArchived`).
+- Preserve the local-only architecture unless the user explicitly requests backend/networked changes.
+- When adding a visible column to a list/table, update the corresponding `ColumnDef` metadata so it stays filterable.
+- Keep the Actions column non-filterable and non-sortable unless explicitly requested.
+- Prefer schema migrations/backfills in [src/db.ts](/Users/me/Work/AI/Codex/src/db.ts) over breaking existing local data.
+- Keep import/export backward-compatible where reasonable.
+- If changing totals or growth semantics, check whether the requested behavior should follow Market filters, Investment filters, or persist independently.
+- The app branding is now `Squirrl`; do not revert to older “Investments” product naming unless explicitly requested.
 
 ### UI / DataTable conventions (current)
 
-- The Categories and Purchases list views are Bootstrap-styled DataTables (client-side) initialized in `/Users/me/Work/AI/Codex/src/main.ts`.
-- DataTables currently run in `jQuery` plugin mode (CDN scripts + jQuery in `/Users/me/Work/AI/Codex/index.html`). Do not remove jQuery unless DataTables is migrated to a local/vanilla setup and verified.
-- App-level filtering remains the source of truth (filter chips/breadcrumbs). DataTables built-in search is disabled.
-- DataTables controls row (`Showing ... entries`, `entries per page`, pagination) must render **below** the table.
-- Data table wrappers should not use the old rounded bordered box style around the table.
-- Data tables use Bootstrap `table-striped`.
-- DataTables headers keep a light background style, but sticky header behavior is disabled for DataTables tables (sorting interaction must keep working).
-- Column alignment rule: all table columns (header + body) are left-aligned except the final Actions column.
-- Actions column rules:
-  - Header text is visually blank (accessible label only).
-  - Only the final Actions column is right-aligned.
-  - Action buttons are right-aligned within the cell and use the shared custom small button sizing (`action-menu-btn`).
-- Purchase table column layout (current):
-  - `Name` is the first column.
-  - `Date` appears immediately before the Actions column.
-  - The visible `Archived` column is removed (archived rows are shown visually instead).
-- Archived rows should appear grayed out (neutral gray styling), not danger/red-tinted.
-- Filter display above each DataTable:
-  - Inline breadcrumb-style path (no large boxed container).
-  - Prefix text is `Filter:`
-  - Divider is `>`
-  - Clicking a crumb removes that filter.
-  - `Clear Filter` button sits inline and right-aligned on the same row.
-- If changing visible table columns or ordering, keep the DataTables Actions column non-sortable and preserve current filterability expectations for visible data columns.
-- Growth reporting (current prototype direction):
-  - report scope follows active `categoriesList` (Markets table) filter context
-  - parent market selections are subtree-inclusive
-  - reporting uses valuation snapshots + contribution math from active/non-archived inventory records
+- Main sections are:
+- `Growth`
+- `Markets`
+- `Investments`
+- `Data Tools`
 
-## Skills
-A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.
-### Available skills
-- skill-creator: Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Codex's capabilities with specialized knowledge, workflows, or tool integrations. (file: /Users/me/.codex/skills/.system/skill-creator/SKILL.md)
-- skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos). (file: /Users/me/.codex/skills/.system/skill-installer/SKILL.md)
-### How to use skills
-- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.
-- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.
-- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.
-- How to use a skill (progressive disclosure):
-  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.
-  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.
-  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.
-  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.
-  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.
-- Coordination and sequencing:
-  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.
-  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.
-- Context hygiene:
-  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.
-  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.
-  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.
-- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.
+- `Markets` and `Investments` are Bootstrap-styled DataTables initialized in [src/main.ts](/Users/me/Work/AI/Codex/src/main.ts).
+- DataTables currently run in `jQuery` plugin mode via CDN assets in [index.html](/Users/me/Work/AI/Codex/index.html). Do not remove jQuery unless DataTables is migrated and verified.
+- App-level filter chips remain the source of truth. DataTables built-in search is disabled.
+- DataTables controls (`Showing ... entries`, pagination) render below the table.
+- Table wrappers do not use the old rounded bordered container around the table itself.
+- Data tables use Bootstrap `table-striped`.
+- Header background is a light green gradient and footer uses a medium-green summary style.
+- Header sort icons are intentionally hidden.
+- Column alignment rule: all columns are left-aligned except explicit numeric/right-aligned columns and the final Actions column.
+- Only the final Actions column is right-aligned.
+- Action links in tables are styled as links, not heavy buttons.
+- Archived/inactive rows appear visually muted rather than danger-red.
+
+- Filter display above tables:
+- Inline breadcrumb-style path
+- Prefix text is `Filter:`
+- Chips are the interaction surface
+- Clicking a chip removes that filter
+- Chips may include an inline remove glyph
+- Clear/reset actions sit inline at the right when present
+- Pagination text and `Showing ... entries` text are styled down to match the filter-row text size
+
+- Growth section:
+- Uses a custom table, not the jQuery DataTable instance
+- Supports expandable parent/child rows
+- Shows Market-level rollups with child rows beneath
+- Child arrows use the same green secondary color family as Market hierarchy arrows
+- Includes chart widgets when enabled in settings
+- Filter label reflects current Markets filter scope
+
+- Markets section:
+- Shows nested Markets inline in the table
+- Child rows are shown inline rather than hidden behind an expander
+- Spot refresh actions appear only for Spot markets with code + API key
+- Charts in the section are optional via settings
+
+- Investments section:
+- Is collapsible
+- Uses a modal for create/edit
+- Market selection is optional in some flows
+- Visible Market column supports subtree filtering
+
+- Data Tools section:
+- Is collapsible
+- Shows storage usage text at top
+- Contains Export, Import, and Delete Data blocks
+
+### Table theming details (project-specific)
+
+- Table headers use a light green gradient background.
+- Table footers use a medium-green summary background.
+- Secondary muted table-adjacent text uses the project green palette instead of neutral grey.
+- Section headings and primary buttons are coordinated around the shared primary green token.
+- Row action controls are link-styled rather than filled action buttons.
+
+### Settings flags affecting table/chart sections
+
+- `showMarketsGraphs` defaults to `true`
+- `showGrowthGraph` defaults to `false`
+
+Both values are persisted in the settings store and control optional chart blocks in the relevant sections.
+
+### Build/versioning notes
+
+- Build version is injected into HTML using `__APP_BUILD_VERSION__`.
+- The visible app version is read from the HTML meta tag, not from `package.json`.
+- Cache busting is done by appending the build version to CDN asset URLs.
+- The version format is currently `YYMMDD-HHMM`.
+
+### Reuse guidance
+
+- Keep this file project-specific and factual.
+- If you want a reusable guide across repos, move generic rules into a separate template file and keep `AGENTS.md` focused on this app’s current behavior.
+- Reusable DataTables guidance for other projects lives in [Datatables-Core.md](/Users/me/Work/AI/Codex/Datatables-Core.md).

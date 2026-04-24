@@ -43,7 +43,8 @@ Each table section should render in this order:
 - Divider: `>`
 - Inline breadcrumb style (no large boxed wrapper)
 - Clicking a crumb removes that specific filter
-- Optional right-aligned `Clear Filter` action
+- Each crumb may include an inline remove glyph if the project style calls for it
+- Optional right-aligned contextual action may appear on the same row
 
 Filter row is app UI logic, not DataTables search.
 
@@ -54,11 +55,13 @@ Filter row is app UI logic, not DataTables search.
 - first visible column default sort ascending
 - actions column non-sortable
 - controls row rendered below the table
+- pagination/info sizing can be styled to match filter-row text size
 
 ## Column Alignment Contract
 
 - all columns left-aligned by default
 - money/currency columns right-aligned
+- numeric-but-not-currency columns may be centered if the project chooses
 - final actions column right-aligned
 
 Implementation rule:
@@ -86,11 +89,18 @@ When grand totals are required:
 
 - render totals in `<tfoot>` (not above the table)
 - apply shared summary styling across all tables
+- use the footer for section totals, not an extra summary block above the table, unless the product explicitly needs both
 
 ## Row State Styling Contract
 
 - archived/inactive rows should be visually de-emphasized
 - use neutral grayscale emphasis, avoid destructive color semantics by default
+
+## Visual Theming Contract
+
+- header background, footer background, chip styling, and pagination may be themed, but should remain consistent across list sections
+- if themed colors are introduced, define them as reusable CSS tokens rather than one-off values
+- table visuals should still preserve legibility, especially for sortable headers, muted rows, and numeric totals
 
 ## Reproduction Checklist
 
@@ -104,6 +114,7 @@ When grand totals are required:
 8. Use inner wrapper for actions button layout.
 9. Add archived/inactive row de-emphasis style.
 10. If totals needed, render `<tfoot>` summary row.
+11. If custom theming is used, apply it through shared tokens across headers, footers, chips, and controls.
 
 ## Migration Guidance
 
