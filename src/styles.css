@@ -121,19 +121,75 @@ body {
 }
 
 .page-header {
-  margin-bottom: 0.25rem;
+  margin-bottom: 0;
+}
+
+.page-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--hedgee-card-border);
+  border-radius: 0.9rem;
+  background: var(--panel-chrome-bg);
+  box-shadow: var(--hedgee-card-shadow);
+}
+
+.page-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.page-header-copy {
+  min-width: 0;
+}
+
+.page-header-logo-slot {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 0.8rem;
+  border: 0;
+  background: transparent;
+  object-fit: cover;
+  flex: 0 0 auto;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.75),
+    0 -1px 0 rgba(7, 52, 98, 0.28);
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.5));
+}
+
+.page-header-actions {
+  flex: 0 0 auto;
 }
 
 :root[data-app-theme="classic"] .page-header h1 {
-  letter-spacing: -0.02em;
-  font-weight: 800;
-  color: #5a4027;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+  letter-spacing: -0.01em;
+  font-weight: 700;
+  font-size: clamp(1.65rem, 2.5vw, 2.2rem);
+  line-height: 1.05;
+  color: var(--bs-heading-color);
+  margin-bottom: 0.22rem !important;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.75),
+    0 -1px 0 rgba(7, 52, 98, 0.25);
+  display: inline-block;
 }
 
 :root[data-app-theme="classic"][data-bs-theme="dark"] .page-header h1 {
-  color: #f0e4d2;
-  text-shadow: none;
+  color: var(--bs-heading-color);
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.12),
+    0 -1px 0 rgba(2, 18, 34, 0.45);
+}
+
+.page-header-subtitle {
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+  opacity: 0.92;
+  max-width: 72ch;
 }
 
 :root[data-app-theme="classic"] .card {
@@ -177,7 +233,7 @@ body {
 }
 
 :root[data-app-theme="classic"] .page-header {
-  padding: 0.45rem 0.2rem 0.25rem;
+  padding: 0;
 }
 
 :root[data-app-theme="classic"] .btn.btn-primary:not(.link-cell):not(.action-menu-btn):not(.archive-record-btn):not(.modal-cancel-btn):not(.capture-snapshot-btn) {
@@ -951,6 +1007,16 @@ section.card.shadow-sm > .card-body {
 }
 
 @media (max-width: 767.98px) {
+  .page-header-bar {
+    flex-wrap: wrap;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .page-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .section-head {
     flex-wrap: wrap;
   }

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://ballyhoos.github.io/Codex/sitemap.xml
+Sitemap: https://squirrl.app/sitemap.xml

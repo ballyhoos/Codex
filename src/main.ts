@@ -2280,9 +2280,9 @@ function render() {
     filteredInventoryRecords,
     filteredCategories,
   } = getDerived();
-  const appTitle = "Investments";
-  const appSubtitle = "Maintain your investments locally with fast filtering, category tracking, and clear totals.";
-  const settingsButtonLabel = "Edit settings";
+  const appTitle = "Squirrl.app";
+  const appSubtitle = "Stash, sort, and track your investments locally with fast filters and clear totals.";
+  const settingsButtonLabel = "Settings";
   const report = buildGrowthReportRows(categoryDescendantsMap);
   const marketWidgetData = buildMarketWidgetData(report.rows);
   const growthFilterChips = state.filters.filter((f) => f.viewId === "categoriesList");
@@ -2376,14 +2376,23 @@ function render() {
     .join("");
 
   rootEl.innerHTML = `
-    <div class="app-shell container-fluid py-3 py-lg-4">
-      <header class="page-header mb-2">
-        <div class="section-head">
-          <div>
-            <h1 class="display-6 mb-1">${escapeHtml(appTitle)}</h1>
-            <p class="text-body-secondary mb-0">${escapeHtml(appSubtitle)}</p>
+    <div class="app-shell container-fluid pt-0 pb-3 pb-lg-4">
+      <header class="page-header">
+        <div class="page-header-bar">
+          <div class="page-header-brand">
+            <img
+              class="page-header-logo-slot"
+              src="/squirrl-investment-tracker-logo.png"
+              alt="Squirrl investment tracker logo"
+              width="64"
+              height="64"
+            />
+            <div class="page-header-copy">
+              <h1 class="display-6 mb-1">${escapeHtml(appTitle)}</h1>
+              <p class="page-header-subtitle text-body-secondary mb-0">${escapeHtml(appSubtitle)}</p>
+            </div>
           </div>
-          <div class="d-flex align-items-center gap-2">
+          <div class="page-header-actions d-flex align-items-center gap-2">
             <button type="button" class="header-indicator-btn btn btn-primary btn-sm" data-action="open-settings" aria-label="${escapeHtml(settingsButtonLabel)}">${escapeHtml(settingsButtonLabel)}</button>
           </div>
         </div>
@@ -2493,7 +2502,7 @@ function render() {
         <div class="section-head markets-section-head">
           <h2 class="h5 mb-0">Markets</h2>
           <div class="d-flex align-items-center gap-2 justify-content-end markets-section-actions">
-            <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">Create New</button>
+            <button type="button" class="btn btn-sm btn-primary" data-action="open-create-category">New</button>
           </div>
         </div>
         ${marketsSpotMessage ? `<div class="alert alert-${marketsSpotMessage.tone} py-1 px-2 mb-2 small" role="status">${escapeHtml(marketsSpotMessage.text)}</div>` : ""}
@@ -2523,7 +2532,7 @@ function render() {
         <summary class="card-header section-head">
           <h2 class="h5 mb-0">Investments</h2>
           <div class="d-flex align-items-center gap-2 justify-content-end">
-            <button type="button" class="btn btn-sm btn-primary" data-action="open-create-inventory">Create New</button>
+            <button type="button" class="btn btn-sm btn-primary" data-action="open-create-inventory">New</button>
           </div>
         </summary>
         <div class="details-content card-body">
