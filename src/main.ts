@@ -2280,7 +2280,7 @@ function render() {
     filteredInventoryRecords,
     filteredCategories,
   } = getDerived();
-  const appTitle = "Squirrl.app";
+  const appTitle = "Squirrl";
   const appSubtitle = "Stash, sort, and track your investments locally with fast filters and clear totals.";
   const settingsButtonLabel = "Settings";
   const report = buildGrowthReportRows(categoryDescendantsMap);
@@ -2380,13 +2380,15 @@ function render() {
       <header class="page-header">
         <div class="page-header-bar">
           <div class="page-header-brand">
-            <img
-              class="page-header-logo-slot"
-              src="/squirrl-investment-tracker-logo.png"
-              alt="Squirrl investment tracker logo"
-              width="64"
-              height="64"
-            />
+            <div class="page-header-logo-shell">
+              <img
+                class="page-header-logo-slot"
+                src="/squirrl-investment-tracker-logo.png"
+                alt="Squirrl investment tracker logo"
+                width="64"
+                height="64"
+              />
+            </div>
             <div class="page-header-copy">
               <h1 class="display-6 mb-1">${escapeHtml(appTitle)}</h1>
               <p class="page-header-subtitle text-body-secondary mb-0">${escapeHtml(appSubtitle)}</p>
@@ -2402,7 +2404,7 @@ function render() {
       <section class="card shadow-sm">
         <div class="card-body">
           <div class="section-head">
-            <h2 class="h5 mb-0">Growth Report</h2>
+            <h2 class="h5 mb-0">Growth</h2>
           </div>
           ${showMarketsGraphsSection ? `
             <div class="markets-widget-grid mb-2">

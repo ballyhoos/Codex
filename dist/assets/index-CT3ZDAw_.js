@@ -269,7 +269,7 @@
         </div>
         </div>
       </div>
-    `:""}return""}function q(){const e=window.scrollX,t=window.scrollY,a=S.querySelector('details[data-section="data-tools"]');a&&(pt=a.open);const r=S.querySelector('details[data-section="investments"]');r&&(ft=r.open),Fa(),Pa();const{inventoryColumns:n,categoryColumns:o,categoryDescendantsMap:i,filteredInventoryRecords:s,filteredCategories:l}=Qa(),c="Squirrl.app",u="Stash, sort, and track your investments locally with fast filters and clear totals.",p="Settings",h=tn(i),b=Va(h.rows),w=f.filters.filter(m=>m.viewId==="categoriesList"),O=w.length?w.map(m=>m.label).join(" > "):"No filters",C=D("showMarketsGraphs")??Me,y=l.some(m=>m.parentId==null),v=C&&y&&b.length>0,E=new Set([...te].filter(m=>{var $;return((($=h.childRowsByParent[m])==null?void 0:$.length)||0)>0}));E.size!==te.size&&(te=E);const g=h.startTotalCents>0?h.netGrowthTotalCents/h.startTotalCents:null,A=f.exportText||zt(),he=s.map(m=>`
+    `:""}return""}function q(){const e=window.scrollX,t=window.scrollY,a=S.querySelector('details[data-section="data-tools"]');a&&(pt=a.open);const r=S.querySelector('details[data-section="investments"]');r&&(ft=r.open),Fa(),Pa();const{inventoryColumns:n,categoryColumns:o,categoryDescendantsMap:i,filteredInventoryRecords:s,filteredCategories:l}=Qa(),c="Squirrl",u="Stash, sort, and track your investments locally with fast filters and clear totals.",p="Settings",h=tn(i),b=Va(h.rows),w=f.filters.filter(m=>m.viewId==="categoriesList"),O=w.length?w.map(m=>m.label).join(" > "):"No filters",C=D("showMarketsGraphs")??Me,y=l.some(m=>m.parentId==null),v=C&&y&&b.length>0,E=new Set([...te].filter(m=>{var $;return((($=h.childRowsByParent[m])==null?void 0:$.length)||0)>0}));E.size!==te.size&&(te=E);const g=h.startTotalCents>0?h.netGrowthTotalCents/h.startTotalCents:null,A=f.exportText||zt(),he=s.map(m=>`
         <tr class="${[Ka(m)?"":"row-inactive",m.archived?"row-archived":""].filter(Boolean).join(" ")}" data-row-edit="inventory" data-id="${m.id}">
           ${n.map(k=>`<td class="${Q(k)}">${Oe("inventoryTable",m,k)}</td>`).join("")}
           <td class="actions-col-cell">
@@ -301,13 +301,15 @@
       <header class="page-header">
         <div class="page-header-bar">
           <div class="page-header-brand">
-            <img
-              class="page-header-logo-slot"
-              src="/squirrl-investment-tracker-logo.png"
-              alt="Squirrl investment tracker logo"
-              width="64"
-              height="64"
-            />
+            <div class="page-header-logo-shell">
+              <img
+                class="page-header-logo-slot"
+                src="/squirrl-investment-tracker-logo.png"
+                alt="Squirrl investment tracker logo"
+                width="64"
+                height="64"
+              />
+            </div>
             <div class="page-header-copy">
               <h1 class="display-6 mb-1">${d(c)}</h1>
               <p class="page-header-subtitle text-body-secondary mb-0">${d(u)}</p>
@@ -323,7 +325,7 @@
       <section class="card shadow-sm">
         <div class="card-body">
           <div class="section-head">
-            <h2 class="h5 mb-0">Growth Report</h2>
+            <h2 class="h5 mb-0">Growth</h2>
           </div>
           ${v?`
             <div class="markets-widget-grid mb-2">
