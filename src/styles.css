@@ -626,7 +626,7 @@ section.card.shadow-sm > .card-body {
 .growth-expand-btn {
   border: 0;
   background: transparent;
-  color: var(--bs-link-color);
+  color: var(--bs-secondary-color);
   padding: 0;
   margin-right: 0.35rem;
   line-height: 1;
@@ -644,7 +644,7 @@ section.card.shadow-sm > .card-body {
 
 .growth-expand-btn:hover,
 .growth-expand-btn:focus-visible {
-  color: var(--bs-link-hover-color);
+  color: var(--bs-secondary-color);
 }
 
 .growth-expand-placeholder {
