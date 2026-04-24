@@ -2466,7 +2466,7 @@ function render() {
                         .map(
                           (child) => `
                             <tr class="growth-child-row" data-parent-market-id="${escapeHtml(row.marketId)}" ${expanded ? "" : "hidden"}>
-                              <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span>↳ ${escapeHtml(child.marketLabel)}</td>
+                              <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span><span class="growth-child-icon" aria-hidden="true">↳</span> ${escapeHtml(child.marketLabel)}</td>
                               <td class="text-end">${child.startValueCents == null ? "—" : escapeHtml(formatMoney(child.startValueCents))}</td>
                               <td class="text-end">${child.endValueCents == null ? "—" : escapeHtml(formatMoney(child.endValueCents))}</td>
                               <td class="text-end ${getGrowthToneClass(child.netGrowthCents)}">${child.netGrowthCents == null ? "—" : escapeHtml(formatMoney(child.netGrowthCents))}</td>

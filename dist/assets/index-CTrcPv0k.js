@@ -376,7 +376,7 @@
                       </tr>
                       ${$.map(M=>`
                             <tr class="growth-child-row" data-parent-market-id="${d(m.marketId)}" ${k?"":"hidden"}>
-                              <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span>↳ ${d(M.marketLabel)}</td>
+                              <td class="growth-child-label"><span class="growth-expand-placeholder" aria-hidden="true"></span><span class="growth-child-icon" aria-hidden="true">↳</span> ${d(M.marketLabel)}</td>
                               <td class="text-end">${M.startValueCents==null?"—":d(I(M.startValueCents))}</td>
                               <td class="text-end">${M.endValueCents==null?"—":d(I(M.endValueCents))}</td>
                               <td class="text-end ${J(M.netGrowthCents)}">${M.netGrowthCents==null?"—":d(I(M.netGrowthCents))}</td>

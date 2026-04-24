@@ -676,6 +676,11 @@ section.card.shadow-sm > .card-body {
   padding-left: 0.5rem !important;
 }
 
+.growth-child-icon {
+  color: var(--bs-secondary-color);
+  margin-right: 0.35rem;
+}
+
 .table-wrap table.dataTable tbody td.growth-child-label {
   padding-left: 0.5rem !important;
 }
