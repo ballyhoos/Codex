@@ -14,14 +14,13 @@ function getLocalBuildVersion(): string {
   return `${year}${month}${day}-${hours}${minutes}`;
 }
 
-const buildVersion = getLocalBuildVersion();
-
 export default defineConfig({
   base: "./",
   plugins: [
     {
       name: "inject-build-version",
       transformIndexHtml(html) {
+        const buildVersion = getLocalBuildVersion();
         return html.replaceAll("__APP_BUILD_VERSION__", buildVersion);
       },
     },
