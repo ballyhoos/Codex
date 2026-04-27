@@ -354,6 +354,7 @@ function parseMoneyToCents(raw: string): number | null {
 
 type SpotRefreshRoute =
   | { kind: "bullion"; metal: "XAG" | "XAU"; quoteCurrency?: string; normalizedCode: string }
+  | { kind: "crypto"; symbol: string; quoteCurrency?: string; normalizedCode: string }
   | { kind: "equity"; symbol: string; normalizedCode: string };
 
 function normalizeUserMarketCode(raw: string): string {
@@ -391,11 +392,43 @@ function parseBullionCode(code: string): SpotRefreshRoute | null {
   return null;
 }
 
+function parseCryptoCode(code: string): SpotRefreshRoute | null {
+  if (!code.startsWith("CRYPTO:")) return null;
+  const rawSymbol = code.slice("CRYPTO:".length).trim().toUpperCase();
+  if (!rawSymbol) return null;
+  const separatedPairMatch = rawSymbol.match(/^([A-Z0-9]{2,20})[\/_-]([A-Z]{3})$/);
+  if (separatedPairMatch) {
+    return {
+      kind: "crypto",
+      symbol: separatedPairMatch[1],
+      quoteCurrency: separatedPairMatch[2],
+      normalizedCode: `CRYPTO:${separatedPairMatch[1]}${separatedPairMatch[2]}`,
+    };
+  }
+
+  const compact = rawSymbol.replace(/[\/_-]/g, "");
+  if (!/^[A-Z0-9]{2,24}$/.test(compact)) return null;
+
+  const compactPairMatch = compact.match(/^([A-Z0-9]{2,21})([A-Z]{3})$/);
+  if (compactPairMatch) {
+    return {
+      kind: "crypto",
+      symbol: compactPairMatch[1],
+      quoteCurrency: compactPairMatch[2],
+      normalizedCode: `CRYPTO:${compact}`,
+    };
+  }
+
+  return { kind: "crypto", symbol: compact, normalizedCode: `CRYPTO:${compact}` };
+}
+
 function resolveSpotRefreshRoute(rawCode: string): SpotRefreshRoute | null {
   const normalized = normalizeUserMarketCode(rawCode);
   if (!normalized) return null;
   const bullion = parseBullionCode(normalized);
   if (bullion) return bullion;
+  const crypto = parseCryptoCode(normalized);
+  if (crypto) return crypto;
   if (/^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(normalized)) {
     return { kind: "equity", symbol: normalized, normalizedCode: normalized };
   }
@@ -698,7 +731,7 @@ async function fetchLatestSpotValueCents(rawCode: string, appCurrency: string, a
       sourcePrice = extractFxRate(fallbackPayload);
       sourceCurrency = fallbackCurrency;
     }
-  } else {
+  } else if (route.kind === "equity") {
     const quotePayload = await fetchAlphaVantagePayload(
       {
         function: "GLOBAL_QUOTE",
@@ -711,6 +744,41 @@ async function fetchLatestSpotValueCents(rawCode: string, appCurrency: string, a
       throw new Error("Could not parse quote price for this symbol.");
     }
     sourceCurrency = inferCurrencyFromEquitySymbol(route.symbol) || appCurrency;
+  } else {
+    // Crypto quotes are most reliable in USD from Alpha Vantage; convert to app currency afterward.
+    const preferredQuoteCurrency = route.quoteCurrency || "USD";
+    try {
+      const cryptoPayload = await fetchAlphaVantagePayload(
+        {
+          function: "CURRENCY_EXCHANGE_RATE",
+          from_currency: route.symbol,
+          to_currency: preferredQuoteCurrency,
+        },
+        apiKey,
+      );
+      sourcePrice = extractFxRate(cryptoPayload);
+      if (sourcePrice == null || sourcePrice <= 0) {
+        throw new Error("Could not parse crypto spot price for this symbol.");
+      }
+      sourceCurrency = preferredQuoteCurrency;
+    } catch (error) {
+      if (route.quoteCurrency || appCurrency === "USD") {
+        throw error;
+      }
+      const usdPayload = await fetchAlphaVantagePayload(
+        {
+          function: "CURRENCY_EXCHANGE_RATE",
+          from_currency: route.symbol,
+          to_currency: "USD",
+        },
+        apiKey,
+      );
+      sourcePrice = extractFxRate(usdPayload);
+      if (sourcePrice == null || sourcePrice <= 0) {
+        throw new Error("Could not parse crypto spot price for this symbol.");
+      }
+      sourceCurrency = "USD";
+    }
   }
 
   if (sourcePrice == null || sourcePrice <= 0) {
@@ -2090,6 +2158,7 @@ function renderModal(): string {
                 value="${escapeHtml(category?.spotCode || "")}"
                 ${category?.evaluationMode === "spot" && hasAlphaVantageApiKey ? "" : "disabled"}
               />
+              <span class="form-text">For crypto, prefix with <code>CRYPTO:</code> (example: <code>CRYPTO:BTC</code>).</span>
             </label>
             <label class="checkbox-row form-check mb-0"><input class="form-check-input" type="checkbox" name="active" ${category ? (category.active !== false ? "checked" : "") : "checked"} /> <span class="form-check-label">Active</span></label>
             ${editing ? `
