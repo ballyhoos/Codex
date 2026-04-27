@@ -1999,10 +1999,6 @@ function renderModal(): string {
                   </span>
                 </label>
                 <label class="form-check form-switch mb-0">
-                  <input class="form-check-input" type="checkbox" name="darkMode" ${getSettingValue<boolean>("darkMode") ?? DEFAULT_DARK_MODE ? "checked" : ""} />
-                  <span class="form-check-label">Dark mode</span>
-                </label>
-                <label class="form-check form-switch mb-0">
                   <input class="form-check-input" type="checkbox" name="showMarketsGraphs" ${getSettingValue<boolean>("showMarketsGraphs") ?? DEFAULT_SHOW_MARKETS_GRAPHS ? "checked" : ""} />
                   <span class="form-check-label">Show Markets graphs</span>
                 </label>
@@ -2281,7 +2277,7 @@ function render() {
     filteredCategories,
   } = getDerived();
   const appTitle = "Squirrl";
-  const appSubtitle = "Stash, sort, and track your investments locally with fast filters and clear totals.";
+  const appSubtitle = "Stash, sort, and track your investments locally with fast filters, clear totals, and private storage.";
   const settingsButtonLabel = "Settings";
   const report = buildGrowthReportRows(categoryDescendantsMap);
   const marketWidgetData = buildMarketWidgetData(report.rows);
@@ -2671,7 +2667,6 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   const currencyCode = String(fd.get("currencyCode") || "").trim().toUpperCase();
   const currencySymbol = String(fd.get("currencySymbol") || "").trim();
   const alphaVantageApiKey = String(fd.get("alphaVantageApiKey") || "").trim();
-  const darkMode = fd.get("darkMode") === "on";
   const showMarketsGraphs = fd.get("showMarketsGraphs") === "on";
   if (!/^[A-Z]{3}$/.test(currencyCode)) {
     alert("Currency code must be a 3-letter code like USD.");
@@ -2684,7 +2679,6 @@ async function handleSettingsSubmit(form: HTMLFormElement) {
   await putSetting("currencyCode", currencyCode);
   await putSetting("currencySymbol", currencySymbol);
   await putSetting("alphaVantageApiKey", alphaVantageApiKey);
-  await putSetting("darkMode", darkMode);
   await putSetting("showMarketsGraphs", showMarketsGraphs);
   closeModal();
   await reloadData();
