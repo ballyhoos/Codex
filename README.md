@@ -25,7 +25,7 @@ The app allows users to:
 - See category totals that reflect the current purchase-table filters
 - Capture valuation snapshots from the header
 - View market-scoped growth reporting over a selected period
-- Export/import JSON (schema V1/V2 compatibility)
+- Export/import JSON (schema V2)
 - Wipe all local IndexedDB data (explicit destructive action)
 
 ## Core Business Rules (Important)

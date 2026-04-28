@@ -41,14 +41,6 @@ export interface AppSetting<T = unknown> {
   value: T;
 }
 
-export interface ExportBundleV1 {
-  schemaVersion: 1;
-  exportedAt: string;
-  settings: AppSetting[];
-  categories: CategoryNode[];
-  purchases: InventoryRecord[];
-}
-
 export interface ExportBundleV2 {
   schemaVersion: 2;
   exportedAt: string;
@@ -57,7 +49,7 @@ export interface ExportBundleV2 {
   purchases: InventoryRecord[];
 }
 
-export type ExportBundle = ExportBundleV1 | ExportBundleV2;
+export type ExportBundle = ExportBundleV2;
 
 export interface FilterClause {
   id: string;

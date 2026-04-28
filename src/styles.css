@@ -996,6 +996,15 @@ section.card.shadow-sm > .card-body {
   margin-bottom: 0.5rem;
 }
 
+.data-tool-block-compact {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+.data-tool-block-compact .data-tool-head {
+  margin-bottom: 0;
+}
+
 .details-card[data-section="data-tools"] .form-control {
   width: 100%;
 }

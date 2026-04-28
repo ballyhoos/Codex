@@ -2640,14 +2640,11 @@ function render() {
           }
           <span class="d-block">Includes this site origin storage (IndexedDB and possibly other browser storage).</span>
         </div>
-        <div class="data-tool-block">
+        <div class="data-tool-block data-tool-block-compact">
           <div class="data-tool-head">
             <span class="h6 mb-0">Export</span>
             <button type="button" class="btn btn-primary btn-sm" data-action="download-json">Export</button>
           </div>
-          <label class="form-label mb-0">Export / Copy JSON
-            <input class="form-control" id="export-text" readonly value="${escapeHtml(exportText)}" />
-          </label>
         </div>
         <div class="data-tool-block">
           <div class="data-tool-head">
@@ -2658,7 +2655,7 @@ function render() {
             <input class="form-control" type="file" id="import-file" accept="application/json,.json" />
           </div>
           <label class="form-label mb-0">Import JSON (replace all)
-            <input class="form-control" id="import-text" placeholder='Paste ExportBundleV1/V2 JSON here' value="${escapeHtml(state.importText)}" />
+            <input class="form-control" id="import-text" placeholder="Paste import JSON here" value="${escapeHtml(state.importText)}" />
           </label>
         </div>
         <div class="danger-zone border border-danger-subtle rounded-3 p-3 mt-3 bg-danger-subtle">
@@ -3052,8 +3049,8 @@ async function handleReplaceImport() {
     alert("Import JSON is not valid.");
     return;
   }
-  if (parsed?.schemaVersion !== 1 && parsed?.schemaVersion !== 2) {
-    alert("Unsupported schemaVersion. Expected 1 or 2.");
+  if (parsed?.schemaVersion !== 2) {
+    alert("Unsupported import format.");
     return;
   }
   if (!Array.isArray(parsed.categories) || !Array.isArray(parsed.purchases)) {
