@@ -1006,9 +1006,33 @@ section.card.shadow-sm > .card-body {
 }
 
 .app-version-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   margin-top: 0.25rem;
   padding-right: 0.25rem;
   font-size: 0.68rem;
+}
+
+.app-footer-x-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  color: var(--bs-link-color);
+  text-decoration: none;
+}
+
+.app-footer-x-link:hover,
+.app-footer-x-link:focus-visible {
+  color: var(--bs-link-hover-color);
+  text-decoration: underline;
+}
+
+.app-footer-x-link .bi {
+  font-size: 0.8rem;
+  line-height: 1;
 }
 
 .details-card {

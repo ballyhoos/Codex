@@ -498,7 +498,18 @@
       </details>
 
       <footer class="app-version-footer text-end text-body-secondary small">
-        App version: ${d(ha)}
+        <a
+          class="app-footer-x-link"
+          href="https://x.com/_ballyhoos"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Follow and contact the creator on X (@_ballyhoos)"
+          title="Follow and contact the creator on X"
+        >
+          <i class="bi bi-twitter-x" aria-hidden="true"></i>
+          <span>@_ballyhoos</span>
+        </a>
+        <span>App version: ${d(ha)}</span>
       </footer>
     </div>
     ${nn()}
