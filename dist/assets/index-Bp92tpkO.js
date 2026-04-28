@@ -498,6 +498,8 @@
       </details>
 
       <footer class="app-version-footer text-end text-body-secondary small">
+        <span>App version: ${d(ha)}</span>
+        <span class="app-footer-separator" aria-hidden="true">|</span>
         <a
           class="app-footer-x-link"
           href="https://x.com/_ballyhoos"
@@ -509,7 +511,6 @@
           <i class="bi bi-twitter-x" aria-hidden="true"></i>
           <span>@_ballyhoos</span>
         </a>
-        <span>App version: ${d(ha)}</span>
       </footer>
     </div>
     ${nn()}

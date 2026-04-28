@@ -1035,6 +1035,10 @@ section.card.shadow-sm > .card-body {
   line-height: 1;
 }
 
+.app-footer-separator {
+  opacity: 0.72;
+}
+
 .details-card {
   overflow: hidden;
 }

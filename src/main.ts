@@ -2673,6 +2673,8 @@ function render() {
       </details>
 
       <footer class="app-version-footer text-end text-body-secondary small">
+        <span>App version: ${escapeHtml(APP_BUILD_VERSION)}</span>
+        <span class="app-footer-separator" aria-hidden="true">|</span>
         <a
           class="app-footer-x-link"
           href="https://x.com/_ballyhoos"
@@ -2684,7 +2686,6 @@ function render() {
           <i class="bi bi-twitter-x" aria-hidden="true"></i>
           <span>@_ballyhoos</span>
         </a>
-        <span>App version: ${escapeHtml(APP_BUILD_VERSION)}</span>
       </footer>
     </div>
     ${renderModal()}
