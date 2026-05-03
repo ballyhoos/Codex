@@ -5,13 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && npm run build:single-html",
+    "build": "npm run build:app",
+    "build:app": "tsc && vite build",
+    "build:docs": "npm run build:app && npm run build:single-html",
     "preview": "vite preview",
     "build:single-html": "node scripts/build-single-html.mjs",
-    "build:single-html:versioned-dist": "GENERATE_VERSIONED_HTML=1 VERSIONED_HTML_DIR=dist npm run build",
-    "build:single-html:full": "npm run build",
-    "single": "npm run build:single-html",
-    "single:full": "npm run build:single-html:full"
+    "single": "npm run build:docs"
   },
   "dependencies": {
     "idb": "^8.0.0"
