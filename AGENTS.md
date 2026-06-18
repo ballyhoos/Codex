@@ -76,8 +76,8 @@ This repository contains **Squirrl**, a local-only front-end SPA for tracking pe
 - `currencyCode`
 - `currencySymbol`
 - `darkMode`
+- `themeId`
 - `showMarketsGraphs`
-- `showGrowthGraph`
 - `alphaVantageApiKey`
 
 ### IndexedDB schema (current)
@@ -99,21 +99,21 @@ Notes:
 
 ### Key files (current implementation)
 
-- [src/main.ts](/Users/me/Work/AI/Codex/src/main.ts) - UI rendering, forms, actions, DataTables setup, charts, settings, import/export
-- [src/db.ts](/Users/me/Work/AI/Codex/src/db.ts) - IndexedDB schema, migrations, CRUD, replace-all, wipe
-- [src/types.ts](/Users/me/Work/AI/Codex/src/types.ts) - shared interfaces/types
-- [src/filters.ts](/Users/me/Work/AI/Codex/src/filters.ts) - filter helpers and generic view filtering
-- [src/totals.ts](/Users/me/Work/AI/Codex/src/totals.ts) - hierarchy/path/totals helpers
-- [src/styles.css](/Users/me/Work/AI/Codex/src/styles.css) - theme, layout, DataTable, modal, and chart styles
-- [index.html](/Users/me/Work/AI/Codex/index.html) - SEO/meta tags, CDN assets, favicon links, version token placeholders
-- [vite.config.ts](/Users/me/Work/AI/Codex/vite.config.ts) - injects build version into HTML
+- [src/main.ts](/Users/me/Work/Vibe/squirrl/src/main.ts) - UI rendering, forms, actions, DataTables setup, charts, settings, import/export
+- [src/db.ts](/Users/me/Work/Vibe/squirrl/src/db.ts) - IndexedDB schema, migrations, CRUD, replace-all, wipe
+- [src/types.ts](/Users/me/Work/Vibe/squirrl/src/types.ts) - shared interfaces/types
+- [src/filters.ts](/Users/me/Work/Vibe/squirrl/src/filters.ts) - filter helpers and generic view filtering
+- [src/totals.ts](/Users/me/Work/Vibe/squirrl/src/totals.ts) - hierarchy/path/totals helpers
+- [src/styles.css](/Users/me/Work/Vibe/squirrl/src/styles.css) - theme, layout, DataTable, modal, and chart styles
+- [index.html](/Users/me/Work/Vibe/squirrl/index.html) - SEO/meta tags, CDN assets, favicon links, version token placeholders
+- [vite.config.ts](/Users/me/Work/Vibe/squirrl/vite.config.ts) - injects build version into HTML
 
 ### Change conventions for future AI edits
 
 - Preserve the local-only architecture unless the user explicitly requests backend/networked changes.
 - When adding a visible column to a list/table, update the corresponding `ColumnDef` metadata so it stays filterable.
 - Keep the Actions column non-filterable and non-sortable unless explicitly requested.
-- Prefer schema migrations/backfills in [src/db.ts](/Users/me/Work/AI/Codex/src/db.ts) over breaking existing local data.
+- Prefer schema migrations/backfills in [src/db.ts](/Users/me/Work/Vibe/squirrl/src/db.ts) over breaking existing local data.
 - Keep import/export backward-compatible where reasonable.
 - If changing totals or growth semantics, check whether the requested behavior should follow Market filters, Investment filters, or persist independently.
 - The app branding is now `Squirrl`; do not revert to older “Investments” product naming unless explicitly requested.
@@ -126,8 +126,8 @@ Notes:
 - `Investments`
 - `Data Tools`
 
-- `Markets` and `Investments` are Bootstrap-styled DataTables initialized in [src/main.ts](/Users/me/Work/AI/Codex/src/main.ts).
-- DataTables currently run in `jQuery` plugin mode via CDN assets in [index.html](/Users/me/Work/AI/Codex/index.html). Do not remove jQuery unless DataTables is migrated and verified.
+- `Markets` and `Investments` are Bootstrap-styled DataTables initialized in [src/main.ts](/Users/me/Work/Vibe/squirrl/src/main.ts).
+- DataTables currently run in `jQuery` plugin mode via CDN assets in [index.html](/Users/me/Work/Vibe/squirrl/index.html). Do not remove jQuery unless DataTables is migrated and verified.
 - App-level filter chips remain the source of truth. DataTables built-in search is disabled.
 - DataTables controls (`Showing ... entries`, pagination) render below the table.
 - Table wrappers do not use the old rounded bordered container around the table itself.
@@ -145,7 +145,6 @@ Notes:
 - Chips are the interaction surface
 - Clicking a chip removes that filter
 - Chips may include an inline remove glyph
-- Clear/reset actions sit inline at the right when present
 - Pagination text and `Showing ... entries` text are styled down to match the filter-row text size
 
 - Growth section:
@@ -184,9 +183,9 @@ Notes:
 ### Settings flags affecting table/chart sections
 
 - `showMarketsGraphs` defaults to `true`
-- `showGrowthGraph` defaults to `false`
+- `darkMode` and `themeId` are persisted, even though the current settings modal only exposes a subset of settings directly.
 
-Both values are persisted in the settings store and control optional chart blocks in the relevant sections.
+`showMarketsGraphs` controls the optional chart widgets shown in the relevant sections.
 
 ### Build/versioning notes
 
@@ -199,4 +198,4 @@ Both values are persisted in the settings store and control optional chart block
 
 - Keep this file project-specific and factual.
 - If you want a reusable guide across repos, move generic rules into a separate template file and keep `AGENTS.md` focused on this app’s current behavior.
-- Reusable DataTables guidance for other projects lives in [Datatables-Core.md](/Users/me/Work/AI/Codex/Datatables-Core.md).
+- Reusable DataTables guidance for other projects lives in [Datatables-Core.md](/Users/me/Work/Vibe/squirrl/Datatables-Core.md).
