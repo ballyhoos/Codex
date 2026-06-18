@@ -1,6 +1,6 @@
-# Investment Purchase Tracker (Local-Only SPA)
+# Squirrl (Local-Only SPA)
 
-Pure front-end web app for tracking purchases of investment products.
+Pure front-end web app for tracking personal investments.
 
 All user data is stored locally in the browser using IndexedDB. There is no backend, no server-side database, and no API for app data.
 
@@ -16,16 +16,15 @@ All user data is stored locally in the browser using IndexedDB. There is no back
 
 The app allows users to:
 
-- Create and manage categories/subcategories (multi-level tree)
-- Record purchases with pricing and quantity
-- Mark purchases as `active` or `inactive`
-- Soft-delete records via `archived` flags (archive/restore instead of delete)
-- View purchases and categories in table/list views
-- Click any displayed data value to add a filter chip (view-scoped filtering)
-- See category totals that reflect the current purchase-table filters
-- Capture valuation snapshots from the header
-- View market-scoped growth reporting over a selected period
-- Export/import JSON (schema V2)
+- Create and manage nested markets
+- Record investments with pricing, quantity, and baseline values
+- Mark investments as `active` or `inactive`
+- Soft-hide records via `archived` flags while keeping them stored locally
+- View markets and investments in filterable table/list views
+- Click displayed data values to add view-scoped filter chips
+- See market totals that exclude inactive or archived investment records
+- View market-scoped growth reporting based on current hierarchy and baseline values
+- Export/import JSON backups
 - Wipe all local IndexedDB data (explicit destructive action)
 
 ## Core Business Rules (Important)
@@ -35,30 +34,28 @@ The app allows users to:
 - Data is stored only in IndexedDB on the user's machine.
 - No purchase/category data is sent to any backend.
 
-### Purchase flags
+### Investment flags
 
-- `active = false`: record exists but does **not** count toward totals
-- `archived = true`: soft-deleted/hidden by default in list views
+- `active = false`: record exists but does **not** count toward totals/growth
+- `archived = true`: soft-hidden/hidden by default in list views
 
 ### Totals semantics
 
-Category totals:
+Market totals:
 
-- Reflect the **current purchase table filters**
-- Include only purchases where:
-  - `active === true`
-  - `archived === false`
+- Exclude inactive or archived investment records
+- Remain stable and do not collapse just because the Investments table is filtered
 
 ### Filtering semantics
 
 - All visible data columns in each list/table view are filterable.
 - Clicking a displayed value creates a breadcrumb/chip filter.
 - Multiple filters use `AND`.
-- Filters are view-scoped (`purchasesTable` vs `categoriesList`).
+- Filters are view-scoped (`inventoryTable` vs `categoriesList`).
 
 ## Data Model (Current)
 
-### `PurchaseRecord`
+### `InventoryRecord`
 
 - `id`
 - `purchaseDate` (`YYYY-MM-DD`)
@@ -84,6 +81,10 @@ Category totals:
 - `pathNames`
 - `depth`
 - `sortOrder`
+- `evaluationMode?` (`spot` | `snapshot`)
+- `spotValueCents?`
+- `spotCode?`
+- `active`
 - `isArchived`
 - `archivedAt?`
 - `createdAt`
@@ -91,21 +92,7 @@ Category totals:
 
 ### `settings`
 
-- key/value records (currently includes app-wide `currencyCode`, default `USD`)
-
-### `ValuationSnapshot`
-
-- `id`
-- `capturedAt`
-- `scope` (`portfolio` | `market`)
-- `marketId?`
-- `evaluationMode?` (`spot` | `snapshot`)
-- `valueCents`
-- `quantity?`
-- `source` (`manual` | `derived`)
-- `note?`
-- `createdAt`
-- `updatedAt`
+- key/value records such as `currencyCode`, `currencySymbol`, `darkMode`, `showMarketsGraphs`, and `alphaVantageApiKey`
 
 ## IndexedDB Schema
 
@@ -116,13 +103,11 @@ Object stores:
 - `inventory`
 - `categories`
 - `settings`
-- `valuationSnapshots`
 
 Indexes:
 
 - `inventory`: `by_purchaseDate`, `by_productName`, `by_categoryId`, `by_active`, `by_archived`, `by_updatedAt`
 - `categories`: `by_parentId`, `by_name`, `by_isArchived`
-- `valuationSnapshots`: `by_capturedAt`, `by_scope`, `by_marketId`, `by_marketId_capturedAt`
 
 ## Project Structure (Current)
 
@@ -136,9 +121,10 @@ Indexes:
 ## Development Notes For Future Changes
 
 - Keep the app backend-free and local-only unless explicitly requested.
-- Prefer soft delete (`archive/restore`) over per-record hard delete.
+- Keep the Squirrl branding rather than older “Investments” naming.
+- Individual records can now be hard-deleted from edit flows when explicitly requested.
 - When adding new visible data columns to any list/table, make them filterable via `ColumnDef` metadata unless they are action columns.
-- Preserve totals semantics (filtered purchases only, active + non-archived only) unless product requirements change.
+- Preserve totals semantics unless product requirements change.
 - For schema changes, update IndexedDB version and add migration/backfill logic in `src/db.ts`.
 - Keep exports/imports backward-compatible where practical (default missing flags like `active`/`archived`).
 
